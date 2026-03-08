@@ -133,3 +133,7 @@ src/
   stores/           # Zustand stores (editor, connection, bookmark, history)
   lib/              # API client, utilities, SQL formatter, vector utils, types
 ```
+
+## License
+
+Apache License 2.0 — see [LICENSE](LICENSE) for details.
