@@ -308,7 +308,7 @@ export function AppShell() {
         )}
         <div className="flex-1" />
         <div className="flex items-center px-3 h-full text-muted-foreground/50">
-          Stoolap Studio v0.1.0
+          Stoolap Studio v{process.env.NEXT_PUBLIC_APP_VERSION}
         </div>
       </div>
     </div>
