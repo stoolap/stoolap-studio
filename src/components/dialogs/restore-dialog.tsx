@@ -89,28 +89,21 @@ export function RestoreDialog({ open, onOpenChange }: RestoreDialogProps) {
 
     // DDL (CREATE/DROP/ALTER) auto-commits in stoolap and breaks any active
     // transaction, so we must NOT wrap DDL+DML in a single BEGIN/COMMIT.
-    // Instead, batch consecutive DML statements into their own transactions.
-    let inDmlBatch = false;
+    // Instead, wrap consecutive DML statements in their own transactions.
+    // Each statement is sent individually to avoid the API's auto-transaction
+    // logic conflicting with our manual transaction control.
+    let inTxn = false;
 
     try {
-      const BATCH_SIZE = 50;
-      let dmlBatch: string[] = [];
-
-      const flushBatch = async () => {
-        if (dmlBatch.length === 0) return;
-        await api.executeQuery(activeId, dmlBatch.join(";\n"));
-        dmlBatch = [];
-      };
-
       for (let i = 0; i < statements.length; i++) {
         if (abortRef.current) {
-          if (inDmlBatch) {
+          if (inTxn) {
             try {
               await api.executeQuery(activeId, "ROLLBACK");
             } catch {
               /* ignore */
             }
-            inDmlBatch = false;
+            inTxn = false;
           }
           throw new Error("Restore cancelled by user");
         }
@@ -122,30 +115,18 @@ export function RestoreDialog({ open, onOpenChange }: RestoreDialogProps) {
           trimmed.startsWith("UPDATE") ||
           trimmed.startsWith("DELETE");
 
-        if (isDml && !inDmlBatch && useTransaction) {
+        if (isDml && !inTxn && useTransaction) {
           await api.executeQuery(activeId, "BEGIN");
-          inDmlBatch = true;
-        } else if (!isDml && inDmlBatch) {
-          await flushBatch();
+          inTxn = true;
+        } else if (!isDml && inTxn) {
           await api.executeQuery(activeId, "COMMIT");
-          inDmlBatch = false;
+          inTxn = false;
         }
 
-        if (isDml) {
-          dmlBatch.push(statements[i]);
-          if (dmlBatch.length >= BATCH_SIZE) {
-            await flushBatch();
-          }
-        } else {
-          await api.executeQuery(activeId, statements[i]);
-        }
+        await api.executeQuery(activeId, statements[i]);
       }
 
-      // Flush remaining batch
-      await flushBatch();
-
-      // Commit any remaining DML batch
-      if (inDmlBatch) {
+      if (inTxn) {
         await api.executeQuery(activeId, "COMMIT");
       }
 
@@ -162,7 +143,7 @@ export function RestoreDialog({ open, onOpenChange }: RestoreDialogProps) {
       );
       resetAndClose();
     } catch (e) {
-      if (inDmlBatch) {
+      if (inTxn) {
         try {
           await api.executeQuery(activeId, "ROLLBACK");
         } catch {

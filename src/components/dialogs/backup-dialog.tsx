@@ -82,6 +82,10 @@ export function BackupDialog({ open, onOpenChange }: BackupDialogProps) {
 
           const ddl = await api.fetchDDL(activeId, tableName, "table");
 
+          // Fetch column types from DESCRIBE (needed for Vector dimensions)
+          const colInfos = await api.describeTable(activeId, tableName);
+          const columnTypes = colInfos.map((c) => c.type);
+
           let columns: string[] = [];
           const rows: unknown[][] = [];
           if (options.data) {
@@ -109,8 +113,13 @@ export function BackupDialog({ open, onOpenChange }: BackupDialogProps) {
             }
           }
 
+          // Use DESCRIBE column names if data was not fetched
+          if (columns.length === 0) {
+            columns = colInfos.map((c) => c.field);
+          }
+
           parts.push(
-            generateTableSection(tableName, ddl, columns, rows, options),
+            generateTableSection(tableName, ddl, columns, rows, options, columnTypes),
           );
 
           if (options.indexes) {
