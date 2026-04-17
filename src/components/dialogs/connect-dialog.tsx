@@ -11,6 +11,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { errorMessage } from "@/lib/utils";
 import { useConnection } from "@/hooks/use-connection";
 import { useHistoryStore } from "@/stores/history-store";
 import { Database, FolderOpen, Zap, Clock, X, Trash2 } from "lucide-react";
@@ -46,7 +47,7 @@ export function ConnectDialog({ open, onOpenChange }: ConnectDialogProps) {
       setName("");
       setPath("");
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Connection failed");
+      setError(errorMessage(e));
     } finally {
       setLoading(false);
     }
@@ -59,7 +60,7 @@ export function ConnectDialog({ open, onOpenChange }: ConnectDialogProps) {
       await connect(entry.path, entry.name);
       onOpenChange(false);
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Connection failed");
+      setError(errorMessage(e));
     } finally {
       setLoading(false);
     }
@@ -134,7 +135,7 @@ export function ConnectDialog({ open, onOpenChange }: ConnectDialogProps) {
                 onChange={(e) => setPath(e.target.value)}
               />
               <p className="text-xs text-muted-foreground">
-                Relative or absolute path. The directory will be created if it
+                Server-side path to the database directory. Will be created if it
                 does not exist.
               </p>
             </div>

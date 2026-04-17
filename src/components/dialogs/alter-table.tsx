@@ -27,7 +27,7 @@ import {
 } from "@/components/ui/tooltip";
 import { Plus, Trash2, Undo2 } from "lucide-react";
 import { useConnectionStore } from "@/stores/connection-store";
-import { cn, quoteId } from "@/lib/utils";
+import { cn, quoteId, errorMessage } from "@/lib/utils";
 import { DATA_TYPES, VECTOR_DIM_PRESETS } from "@/lib/constants";
 import * as api from "@/lib/api-client";
 import type { ColumnInfo } from "@/lib/types";
@@ -291,7 +291,7 @@ export function AlterTableDialog({
       onAltered();
       onOpenChange(false);
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Alter failed");
+      setError(errorMessage(e));
     } finally {
       setLoading(false);
     }

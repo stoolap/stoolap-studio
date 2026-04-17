@@ -15,6 +15,7 @@ import { useConnectionStore } from "@/stores/connection-store";
 import { useQueryClient } from "@tanstack/react-query";
 import { Loader2, Upload, FileUp } from "lucide-react";
 import { toast } from "sonner";
+import { errorMessage } from "@/lib/utils";
 import * as api from "@/lib/api-client";
 import { splitStatements } from "@/lib/sql-utils";
 
@@ -150,7 +151,7 @@ export function RestoreDialog({ open, onOpenChange }: RestoreDialogProps) {
           /* ignore */
         }
       }
-      setError(e instanceof Error ? e.message : "Restore failed");
+      setError(errorMessage(e));
     } finally {
       setLoading(false);
     }

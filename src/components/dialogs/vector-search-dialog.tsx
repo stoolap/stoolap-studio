@@ -24,7 +24,7 @@ import { Waypoints, Search, Code, Loader2 } from "lucide-react";
 import { useConnectionStore } from "@/stores/connection-store";
 import { useEditorStore } from "@/stores/editor-store";
 import { useTables, useTableColumns } from "@/hooks/use-schema";
-import { cn, quoteId } from "@/lib/utils";
+import { cn, quoteId, errorMessage } from "@/lib/utils";
 import {
   isDistanceColumn,
   formatVector,
@@ -161,7 +161,7 @@ export function VectorSearchDialog({
       }
     } catch (e) {
       if (!openRef.current) return;
-      setError(e instanceof Error ? e.message : "Search failed");
+      setError(errorMessage(e));
     } finally {
       setSearching(false);
     }

@@ -36,6 +36,7 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { toast } from "sonner";
+import { errorMessage } from "@/lib/utils";
 import * as api from "@/lib/api-client";
 import { splitStatements } from "@/lib/sql-utils";
 
@@ -272,7 +273,7 @@ LIMIT 10;`;
       toast.success("Example database loaded");
     } catch (e) {
       toast.error("Failed to load example", {
-        description: e instanceof Error ? e.message : "Unknown error",
+        description: errorMessage(e),
       });
     } finally {
       setLoadingExample(false);

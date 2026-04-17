@@ -13,6 +13,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Switch } from "@/components/ui/switch";
+import { errorMessage } from "@/lib/utils";
 import type { ColumnInfo } from "@/lib/types";
 
 interface RowEditorDialogProps {
@@ -82,7 +83,7 @@ export function RowEditorDialog({
       await onSave(row);
       handleOpenChange(false);
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Save failed");
+      setError(errorMessage(e));
     } finally {
       setLoading(false);
     }

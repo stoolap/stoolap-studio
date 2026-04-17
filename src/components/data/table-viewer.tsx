@@ -35,7 +35,7 @@ import {
   Clock,
 } from "lucide-react";
 import { toast } from "sonner";
-import { cn, downloadFile, escapeCSV } from "@/lib/utils";
+import { cn, downloadFile, escapeCSV, errorMessage } from "@/lib/utils";
 import * as api from "@/lib/api-client";
 import type { FilterCondition } from "@/lib/api-client";
 import type { ColumnInfo } from "@/lib/types";
@@ -224,7 +224,7 @@ export function TableViewer({
         toast.success("Row updated");
       } catch (e) {
         toast.error("Update failed", {
-          description: e instanceof Error ? e.message : "Unknown error",
+          description: errorMessage(e),
         });
       }
     },
@@ -246,7 +246,7 @@ export function TableViewer({
       toast.success("Row deleted");
     } catch (e) {
       toast.error("Delete failed", {
-        description: e instanceof Error ? e.message : "Unknown error",
+        description: errorMessage(e),
       });
     }
     setPendingDeleteRow(null);
@@ -395,58 +395,66 @@ export function TableViewer({
 
   const handleExportAllCSV = async () => {
     if (!activeId) return;
-    const EXPORT_LIMIT = 100_000;
     const PAGE_SIZE = 10_000;
-    const exportTarget = Math.min(totalRows, EXPORT_LIMIT);
+    const MAX_EXPORT_ROWS = 1_000_000;
+    const exportTarget = Math.min(totalRows, MAX_EXPORT_ROWS);
 
     if (exportTarget > 10_000) {
+      const capped = totalRows > MAX_EXPORT_ROWS;
       const ok = window.confirm(
-        `This will export ${exportTarget.toLocaleString()} rows${totalRows > EXPORT_LIMIT ? ` (capped at ${EXPORT_LIMIT.toLocaleString()})` : ""}. Large exports may take a while. Continue?`,
+        `This will export ${exportTarget.toLocaleString()} rows${capped ? ` (capped at ${MAX_EXPORT_ROWS.toLocaleString()}; table has ${totalRows.toLocaleString()})` : ""}. Large exports may take a while. Continue?`,
       );
       if (!ok) return;
     }
     try {
       toast.info("Exporting all rows...");
       const filters = appliedFilters.length > 0 ? appliedFilters : undefined;
-      // Build CSV incrementally as Blob parts to avoid holding all rows in memory
-      const blobParts: string[] = [];
+      // Stream chunks as Blob parts — each part is released after Blob creation
+      const blobParts: Blob[] = [];
       let totalExported = 0;
 
       for (let off = 0; off < exportTarget; off += PAGE_SIZE) {
+        const pageSize = Math.min(PAGE_SIZE, exportTarget - off);
         const chunk = await api.fetchTableData(
           activeId,
           table,
           off,
-          Math.min(PAGE_SIZE, exportTarget - off),
+          pageSize,
           orderBy,
           orderDir,
           filters,
           appliedAsOf,
         );
+        let csv = "";
         if (off === 0) {
-          blobParts.push(chunk.columns.map(escapeCSV).join(",") + "\n");
+          csv = chunk.columns.map(escapeCSV).join(",") + "\n";
         }
         if (chunk.rows.length > 0) {
-          blobParts.push(
-            chunk.rows.map((r) => r.map(escapeCSV).join(",")).join("\n") + "\n",
-          );
+          csv += chunk.rows.map((r) => r.map(escapeCSV).join(",")).join("\n") + "\n";
           totalExported += chunk.rows.length;
         }
-        if (chunk.rows.length < PAGE_SIZE) break;
+        // Convert string to Blob immediately so the string can be GC'd
+        if (csv) blobParts.push(new Blob([csv]));
+        if (chunk.rows.length < pageSize) break;
       }
 
       const blob = new Blob(blobParts, { type: "text/csv" });
+      blobParts.length = 0; // release references
       const url = URL.createObjectURL(blob);
       const ts = new Date().toISOString().slice(0, 19).replace(/[T:]/g, "-");
       const a = document.createElement("a");
       a.href = url;
       a.download = `${table}_all_${ts}.csv`;
       a.click();
-      URL.revokeObjectURL(url);
-      toast.success(`Exported ${totalExported} rows`);
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+      const capNote =
+        totalRows > MAX_EXPORT_ROWS
+          ? ` (of ${totalRows.toLocaleString()}, capped)`
+          : "";
+      toast.success(`Exported ${totalExported.toLocaleString()} rows${capNote}`);
     } catch (e) {
       toast.error("Export failed", {
-        description: e instanceof Error ? e.message : "Unknown error",
+        description: errorMessage(e),
       });
     }
   };
@@ -511,7 +519,7 @@ export function TableViewer({
           queryClient.invalidateQueries({ queryKey: ["tableData", activeId] });
           queryClient.invalidateQueries({ queryKey: ["rowcount", activeId] });
           toast.error(`Import failed at batch ${chunkIndex}/${totalChunks}`, {
-            description: `${imported} row${imported !== 1 ? "s" : ""} imported before failure. ${chunkErr instanceof Error ? chunkErr.message : "Unknown error"}`,
+            description: `${imported} row${imported !== 1 ? "s" : ""} imported before failure. ${errorMessage(chunkErr)}`,
           });
           return;
         }
@@ -529,7 +537,7 @@ export function TableViewer({
       }
     } catch (e) {
       toast.error("Import failed", {
-        description: e instanceof Error ? e.message : "Unknown error",
+        description: errorMessage(e),
       });
     } finally {
       setImporting(false);
@@ -643,7 +651,7 @@ export function TableViewer({
           variant="ghost"
           size="icon"
           className="h-7 w-7"
-          onClick={() => refetch()}
+          onClick={async () => { await refetch(); toast.success("Data refreshed"); }}
           aria-label="Refresh data"
         >
           <RefreshCw className="h-3.5 w-3.5" />
@@ -898,7 +906,7 @@ export function TableViewer({
         ) : fetchError ? (
           <div className="p-3 text-xs text-destructive">
             Failed to load data:{" "}
-            {fetchError instanceof Error ? fetchError.message : "Unknown error"}
+            {errorMessage(fetchError)}
           </div>
         ) : data ? (
           <DataGrid

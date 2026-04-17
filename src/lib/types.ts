@@ -47,6 +47,7 @@ export interface IndexInfo {
   columnName: string;
   indexType: string;
   isUnique: boolean;
+  options?: string;
 }
 
 export interface ForeignKeyInfo {

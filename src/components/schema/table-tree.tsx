@@ -41,7 +41,7 @@ import {
   Waypoints,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { cn, quoteId } from "@/lib/utils";
+import { cn, quoteId, errorMessage } from "@/lib/utils";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import * as api from "@/lib/api-client";
@@ -279,7 +279,7 @@ function TableNode({
       addTab(`DDL: ${name}`, ddl);
     } catch (e) {
       toast.error("Failed to fetch DDL", {
-        description: e instanceof Error ? e.message : "Unknown error",
+        description: errorMessage(e),
       });
     }
   };
@@ -293,7 +293,7 @@ function TableNode({
       toast.success(`Table "${name}" truncated`);
     } catch (e) {
       toast.error("Failed to truncate table", {
-        description: e instanceof Error ? e.message : "Unknown error",
+        description: errorMessage(e),
       });
     }
   };
@@ -310,7 +310,7 @@ function TableNode({
       toast.success(`${type === "table" ? "Table" : "View"} "${name}" dropped`);
     } catch (e) {
       toast.error(`Failed to drop ${type}`, {
-        description: e instanceof Error ? e.message : "Unknown error",
+        description: errorMessage(e),
       });
     }
   };
@@ -326,7 +326,7 @@ function TableNode({
       toast.success(`Index "${indexName}" dropped`);
     } catch (e) {
       toast.error("Failed to drop index", {
-        description: e instanceof Error ? e.message : "Unknown error",
+        description: errorMessage(e),
       });
     }
   };
@@ -544,13 +544,16 @@ export function TableTree() {
   const [search, setSearch] = useState("");
   const queryClient = useQueryClient();
 
-  const refresh = () => {
-    queryClient.invalidateQueries({ queryKey: ["tables", activeId] });
-    queryClient.invalidateQueries({ queryKey: ["views", activeId] });
-    queryClient.invalidateQueries({ queryKey: ["columns"] });
-    queryClient.invalidateQueries({ queryKey: ["indexes"] });
-    queryClient.invalidateQueries({ queryKey: ["fks"] });
-    queryClient.invalidateQueries({ queryKey: ["rowcount"] });
+  const refresh = async () => {
+    await Promise.all([
+      queryClient.invalidateQueries({ queryKey: ["tables", activeId] }),
+      queryClient.invalidateQueries({ queryKey: ["views", activeId] }),
+      queryClient.invalidateQueries({ queryKey: ["columns"] }),
+      queryClient.invalidateQueries({ queryKey: ["indexes"] }),
+      queryClient.invalidateQueries({ queryKey: ["fks"] }),
+      queryClient.invalidateQueries({ queryKey: ["rowcount"] }),
+    ]);
+    toast.success("Schema refreshed");
   };
 
   const filteredTables = useMemo(() => {

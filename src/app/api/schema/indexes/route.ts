@@ -23,13 +23,14 @@ export async function GET(req: NextRequest) {
       connId,
       `SHOW INDEXES FROM ${quotedTable}`,
     );
-    // Columns: table_name, index_name, column_name, index_type, is_unique
+    // Columns: table_name, index_name, column_name, index_type, is_unique, options
     const indexes: IndexInfo[] = result.rows.map((r) => ({
       tableName: String(r[0] ?? ""),
       indexName: String(r[1] ?? ""),
       columnName: String(r[2] ?? ""),
       indexType: String(r[3] ?? ""),
       isUnique: r[4] === true || r[4] === 1 || String(r[4]) === "true",
+      options: String(r[5] ?? ""),
     }));
     return NextResponse.json(indexes);
   } catch (e) {

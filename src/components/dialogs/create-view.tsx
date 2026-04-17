@@ -12,7 +12,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useConnectionStore } from "@/stores/connection-store";
-import { quoteId } from "@/lib/utils";
+import { quoteId, errorMessage } from "@/lib/utils";
 import * as api from "@/lib/api-client";
 
 interface CreateViewDialogProps {
@@ -55,7 +55,7 @@ export function CreateViewDialog({
       onCreated();
       resetAndClose();
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Create view failed");
+      setError(errorMessage(e));
     } finally {
       setLoading(false);
     }

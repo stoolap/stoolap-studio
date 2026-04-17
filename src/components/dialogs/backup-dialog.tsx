@@ -14,7 +14,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { useConnectionStore } from "@/stores/connection-store";
 import { Loader2, Download } from "lucide-react";
 import { toast } from "sonner";
-import { downloadFile } from "@/lib/utils";
+import { downloadFile, errorMessage } from "@/lib/utils";
 import { quoteId } from "@/lib/sql-utils";
 import { parseForeignKeys } from "@/lib/fk-parser";
 import * as api from "@/lib/api-client";
@@ -150,7 +150,7 @@ export function BackupDialog({ open, onOpenChange }: BackupDialogProps) {
       toast.success("Backup downloaded");
       resetAndClose();
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Backup failed");
+      setError(errorMessage(e));
     } finally {
       setLoading(false);
     }

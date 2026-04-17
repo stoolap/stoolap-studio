@@ -47,6 +47,14 @@
   --radius-4xl: calc(var(--radius) + 16px);
 }
 
+/* Readable font sizes for compact UI (override Tailwind defaults) */
+@theme {
+  --text-xs: 13px;
+  --text-xs--line-height: 1.5;
+  --text-sm: 14px;
+  --text-sm--line-height: 1.5;
+}
+
 /* ============================================================
    Default theme: Zinc (neutral gray)
    ============================================================ */
@@ -477,6 +485,7 @@
 .dark .panel-toolbar {
   background: color-mix(in oklch, var(--muted) 25%, var(--background));
 }
+
 
 /* Active tab indicator */
 .tab-active {

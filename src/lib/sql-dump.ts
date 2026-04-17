@@ -178,7 +178,8 @@ export function generateTableSection(
 
 /**
  * Generate CREATE INDEX statements for a table.
- * Skips auto-created primary key (pk_*) and foreign key (fk_*) indexes.
+ * Handles multi-column indexes (columnName = "(a, b)"), HNSW, and unique indexes.
+ * Skips auto-created primary key (pk_*) indexes.
  */
 export function generateTableIndexes(
   tableName: string,
@@ -187,27 +188,52 @@ export function generateTableIndexes(
     columnName: string;
     indexType: string;
     isUnique: boolean;
+    options?: string;
   }[],
 ): string {
   const lines: string[] = [];
+  const seen = new Set<string>();
+
   for (const idx of indexes) {
-    // Skip auto-created indexes from constraints (PK, FK, UNIQUE column constraints)
-    if (
-      idx.indexName.startsWith("pk_") ||
-      idx.indexName.startsWith("fk_") ||
-      idx.indexName.startsWith("unique_")
-    ) {
-      continue;
+    // Skip primary key auto-indexes (recreated by DDL)
+    if (idx.indexName.startsWith("pk_")) continue;
+    // Deduplicate by index name
+    if (seen.has(idx.indexName)) continue;
+    seen.add(idx.indexName);
+
+    // Parse column list — stoolap returns "(a, b)" for multi-column
+    let columnList: string;
+    const colStr = idx.columnName.trim();
+    if (colStr.startsWith("(") && colStr.endsWith(")")) {
+      const cols = colStr
+        .slice(1, -1)
+        .split(",")
+        .map((c) => quoteId(c.trim()));
+      columnList = cols.join(", ");
+    } else {
+      columnList = quoteId(colStr);
     }
+
     const isHnsw = idx.indexType.toUpperCase() === "HNSW";
     if (isHnsw) {
+      let withClause = "";
+      if (idx.options) {
+        const opts: string[] = [];
+        for (const part of idx.options.split(",").map((s) => s.trim())) {
+          const [key, val] = part.split("=").map((s) => s.trim());
+          if (key === "metric") opts.push(`metric = '${val}'`);
+          else if (key === "m") opts.push(`m = ${val}`);
+          else if (key === "ef_construction") opts.push(`ef_construction = ${val}`);
+        }
+        if (opts.length > 0) withClause = ` WITH (${opts.join(", ")})`;
+      }
       lines.push(
-        `CREATE INDEX ${quoteId(idx.indexName)} ON ${quoteId(tableName)} (${quoteId(idx.columnName)}) USING HNSW;`,
+        `CREATE INDEX ${quoteId(idx.indexName)} ON ${quoteId(tableName)}(${columnList}) USING HNSW${withClause};`,
       );
     } else {
       const unique = idx.isUnique ? "UNIQUE " : "";
       lines.push(
-        `CREATE ${unique}INDEX ${quoteId(idx.indexName)} ON ${quoteId(tableName)} (${quoteId(idx.columnName)});`,
+        `CREATE ${unique}INDEX ${quoteId(idx.indexName)} ON ${quoteId(tableName)}(${columnList});`,
       );
     }
   }

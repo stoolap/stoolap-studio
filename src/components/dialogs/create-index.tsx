@@ -26,7 +26,7 @@ import {
 } from "@/components/ui/tooltip";
 import { CircleHelp } from "lucide-react";
 import { useConnectionStore } from "@/stores/connection-store";
-import { quoteId } from "@/lib/utils";
+import { quoteId, errorMessage } from "@/lib/utils";
 import * as api from "@/lib/api-client";
 import type { ColumnInfo } from "@/lib/types";
 
@@ -114,7 +114,7 @@ export function CreateIndexDialog({
       onCreated();
       resetAndClose();
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Create index failed");
+      setError(errorMessage(e));
     } finally {
       setLoading(false);
     }

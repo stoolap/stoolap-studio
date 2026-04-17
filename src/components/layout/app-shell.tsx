@@ -9,6 +9,7 @@ import { QueryToolbar } from "@/components/editor/query-toolbar";
 import { ResultsPanel } from "@/components/results/results-panel";
 import { TableViewer } from "@/components/data/table-viewer";
 import { KeyboardShortcuts } from "@/components/common/keyboard-shortcuts";
+import { errorMessage } from "@/lib/utils";
 import { useEditorStore } from "@/stores/editor-store";
 import { useConnectionStore } from "@/stores/connection-store";
 import { useTableColumns, useEditorSchema } from "@/hooks/use-schema";
@@ -328,7 +329,7 @@ function DataTabContent({
     return (
       <div className="flex-1 flex items-center justify-center text-destructive text-xs">
         Table &quot;{tableName}&quot; is no longer available:{" "}
-        {error instanceof Error ? error.message : "Not found"}
+        {errorMessage(error)}
       </div>
     );
   }

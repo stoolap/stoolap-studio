@@ -5,6 +5,7 @@ import { useConnectionStore } from "@/stores/connection-store";
 import { useEditorStore } from "@/stores/editor-store";
 import { useQueryClient } from "@tanstack/react-query";
 import { splitStatements } from "@/lib/sql-utils";
+import { errorMessage } from "@/lib/utils";
 import * as api from "@/lib/api-client";
 
 function isDDL(sql: string): boolean {
@@ -79,7 +80,7 @@ export function useQueryExecution() {
           return;
         }
         useEditorStore.getState().setTabResult(tabId, {
-          error: e instanceof Error ? e.message : "Query failed",
+          error: errorMessage(e),
         });
       } finally {
         abortMapRef.current.delete(tabId);

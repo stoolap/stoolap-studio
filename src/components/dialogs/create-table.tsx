@@ -28,7 +28,7 @@ import { Badge } from "@/components/ui/badge";
 import { Plus, Trash2, Link2 } from "lucide-react";
 import { useConnectionStore } from "@/stores/connection-store";
 import { useTables, useTableColumns } from "@/hooks/use-schema";
-import { quoteId } from "@/lib/utils";
+import { quoteId, errorMessage } from "@/lib/utils";
 import { DATA_TYPES, VECTOR_DIM_PRESETS } from "@/lib/constants";
 import * as api from "@/lib/api-client";
 
@@ -251,7 +251,7 @@ export function CreateTableDialog({
       onCreated();
       handleOpenChange(false);
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Create failed");
+      setError(errorMessage(e));
     } finally {
       setLoading(false);
     }
