@@ -73,7 +73,7 @@ export function KeyboardShortcuts() {
       }
 
       // Ctrl/Cmd+Shift+F - Format SQL
-      if (mod && e.shiftKey && e.key === "f") {
+      if (mod && e.shiftKey && e.key.toLowerCase() === "f") {
         e.preventDefault();
         const activeTab = currentTabs.find((t) => t.id === currentActiveTabId);
         if (activeTab && activeTab.sql.trim()) {

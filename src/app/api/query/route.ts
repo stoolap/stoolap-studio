@@ -134,6 +134,11 @@ function classifyStatement(upper: string): "query" | "ddl" | "dml" {
   ) {
     return "ddl";
   }
+  // DML with RETURNING produces rows, which only a query call returns
+  // (execute reports 0 changes and drops them). Ignore string literals.
+  if (/\bRETURNING\b/.test(upper.replace(/'(?:[^']|'')*'/g, "''"))) {
+    return "query";
+  }
   return "dml";
 }
 
@@ -173,7 +178,7 @@ export async function POST(req: NextRequest) {
 
     // Single statement: fast path
     if (statements.length === 1) {
-      return await executeSingle(connId, statements[0]);
+      return await executeSingle(connRunner(connId), statements[0]);
     }
 
     // Multiple statements: wrap DML in transaction, but skip if user has explicit transaction control
@@ -193,21 +198,13 @@ export async function POST(req: NextRequest) {
     });
     const hasDML =
       !hasExplicitTxn && classified.some(({ type }) => type === "dml");
-    if (hasDML) {
-      await dbManager.execute(connId, "BEGIN");
-    }
-
-    let completed = 0;
-    try {
-      for (let i = 0; i < statements.length - 1; i++) {
-        const stmt = statements[i];
-        const type = classifyStatement(stmt.trimStart().toUpperCase());
+    const runAll = async (run: Runner) => {
+      let completed = 0;
+      for (let i = 0; i < classified.length - 1; i++) {
+        const { sql: stmt, type } = classified[i];
         try {
-          if (type === "query") {
-            await dbManager.query(connId, stmt);
-          } else {
-            await dbManager.execute(connId, stmt);
-          }
+          if (type === "query") await run.query(stmt);
+          else await run.execute(stmt);
           completed++;
         } catch (e) {
           const msg = safeErrorMessage(e, "Query failed");
@@ -216,26 +213,35 @@ export async function POST(req: NextRequest) {
           );
         }
       }
-
       // Execute and return result of the last statement
-      const lastResult = await executeSingle(
-        connId,
-        statements[statements.length - 1],
-        start,
-      );
+      return executeSingle(run, statements[statements.length - 1], start);
+    };
 
-      if (hasDML) {
-        await dbManager.execute(connId, "COMMIT");
-      }
-      return lastResult;
-    } catch (e) {
-      if (hasDML) {
+    try {
+      if (!hasDML) return await runAll(connRunner(connId));
+      // Wrap the script in a transaction on a clone of the handle, so other
+      // requests on this connection neither join nor roll back with it.
+      // (The driver's Transaction object refuses DDL, so BEGIN is used.)
+      return await dbManager.session(connId, async (db) => {
+        const run: Runner = {
+          query: (sql) => db.queryRaw(sql),
+          execute: (sql) => db.execute(sql),
+        };
+        await db.execute("BEGIN");
         try {
-          await dbManager.execute(connId, "ROLLBACK");
-        } catch {
-          /* ignore rollback errors */
+          const result = await runAll(run);
+          await db.execute("COMMIT");
+          return result;
+        } catch (e) {
+          try {
+            await db.execute("ROLLBACK");
+          } catch {
+            /* ignore rollback errors */
+          }
+          throw e;
         }
-      }
+      });
+    } catch (e) {
       return NextResponse.json(
         { error: safeErrorMessage(e, "Query failed") },
         { status: 400 },
@@ -249,8 +255,20 @@ export async function POST(req: NextRequest) {
   }
 }
 
+interface Runner {
+  query(sql: string): Promise<{ columns: string[]; rows: unknown[][] }>;
+  execute(sql: string): Promise<{ changes: number }>;
+}
+
+function connRunner(connId: string): Runner {
+  return {
+    query: (sql) => dbManager.query(connId, sql),
+    execute: (sql) => dbManager.execute(connId, sql),
+  };
+}
+
 async function executeSingle(
-  connId: string,
+  run: Runner,
   stmt: string,
   startOverride?: number,
 ) {
@@ -259,7 +277,7 @@ async function executeSingle(
   const type = classifyStatement(upper);
 
   if (type === "query") {
-    const result = await dbManager.query(connId, stmt);
+    const result = await run.query(stmt);
     const time = Math.round((performance.now() - start) * 100) / 100;
     return NextResponse.json({
       columns: result.columns,
@@ -269,7 +287,7 @@ async function executeSingle(
   }
 
   if (type === "ddl") {
-    await dbManager.execute(connId, stmt);
+    await run.execute(stmt);
     const time = Math.round((performance.now() - start) * 100) / 100;
     const words = stmt.trimStart().split(/\s+/);
     const ddlType = `${words[0]} ${words[1] ?? ""}`.toUpperCase().trim();
@@ -277,7 +295,7 @@ async function executeSingle(
   }
 
   // DML
-  const result = await dbManager.execute(connId, stmt);
+  const result = await run.execute(stmt);
   const time = Math.round((performance.now() - start) * 100) / 100;
   return NextResponse.json({ changes: result.changes, time });
 }

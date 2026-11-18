@@ -46,8 +46,13 @@ export function ExplainView({ plan }: ExplainViewProps) {
         )}
       </Button>
       {lines.map((line, i) => {
-        const isHeader = line.startsWith("SELECT") || line.startsWith("plan");
-        const isScan = line.includes("Scan") || line.includes("Lookup");
+        // The plan's root node is the first line (e.g. "SELECT" or "Project ...")
+        const isHeader = i === 0;
+        const isScan =
+          line.includes("Scan") ||
+          line.includes("Lookup") ||
+          line.includes("IndexGet") ||
+          line.includes("PkGet");
         const isJoin = line.includes("Join");
         const isCondition = line.includes("Cond:") || line.includes("Filter:");
         const isStats = line.includes("actual") || line.includes("cost=");

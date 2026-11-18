@@ -1,6 +1,6 @@
 # Stoolap Studio
 
-A visual database management studio for [Stoolap](https://github.com/stoolap/stoolap), built with Next.js. Runs entirely in the browser with the Stoolap engine embedded via WebAssembly/native bindings.
+A visual database management studio for [Stoolap](https://github.com/stoolap/stoolap), built with Next.js. The Stoolap engine runs in-process on the Next.js server through the [@stoolap/node](https://www.npmjs.com/package/@stoolap/node) native driver, so there is no separate database server to run. Stoolap Studio 0.5.0 works with Stoolap 0.5.0 (`@stoolap/node` 0.5.0).
 
 ## Features
 
@@ -41,7 +41,7 @@ A visual database management studio for [Stoolap](https://github.com/stoolap/sto
 - Context menu: Copy Value, Find Similar, Expand
 
 ### Index Management
-- Create standard (BTree, Hash, Bitmap) and HNSW indexes via dialog
+- Create standard and unique indexes (single or multi-column) and HNSW indexes via dialog; the engine picks the index type (B-tree for TEXT columns since Stoolap 0.5.0), and `CREATE INDEX ... USING HASH | BITMAP` in the editor sets it explicitly
 - Index metadata display in schema tree (type, columns, uniqueness)
 - k-NN search template generation from HNSW index context menu
 
@@ -52,7 +52,8 @@ A visual database management studio for [Stoolap](https://github.com/stoolap/sto
 
 ### Backup & Restore
 - SQL dump export with configurable options (tables, data, views, indexes, DROP IF EXISTS)
-- FK dependency-aware table ordering
+- FK dependency-aware ordering: tables are created parents first and dropped children first
+- Index types (BTree, Hash, Bitmap, HNSW) are kept explicit in the dump
 - SQL dump import with progress tracking and transaction safety
 
 ### Theming
@@ -70,7 +71,7 @@ A visual database management studio for [Stoolap](https://github.com/stoolap/sto
 
 ### Prerequisites
 
-- Node.js 18+
+- Node.js 20.9+ (required by Next.js 16)
 - npm
 
 ### Install & Run
@@ -99,6 +100,8 @@ npm start
 | Cmd/Ctrl + T | New tab |
 | Cmd/Ctrl + W | Close tab |
 | Cmd/Ctrl + B | Toggle sidebar |
+| Cmd/Ctrl + F | Search in results |
+| Cmd/Ctrl + C | Copy results |
 | Ctrl + Tab | Next tab |
 | Ctrl + Shift + Tab | Previous tab |
 | Cmd/Ctrl + ? | Shortcuts help |

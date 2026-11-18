@@ -28,6 +28,7 @@ import {
 import { Plus, Trash2, Undo2 } from "lucide-react";
 import { useConnectionStore } from "@/stores/connection-store";
 import { cn, quoteId, errorMessage } from "@/lib/utils";
+import { formatDefaultValue } from "@/lib/sql-utils";
 import { DATA_TYPES, VECTOR_DIM_PRESETS } from "@/lib/constants";
 import * as api from "@/lib/api-client";
 import type { ColumnInfo } from "@/lib/types";
@@ -68,6 +69,8 @@ interface ColumnState {
   dimensions: string;
   nullable: boolean;
   key: string;
+  /** DEFAULT for an added column (empty for none) */
+  defaultValue?: string;
   status: "existing" | "renamed" | "modified" | "added" | "dropped";
 }
 
@@ -95,6 +98,7 @@ export function AlterTableDialog({
   const [newColType, setNewColType] = useState("TEXT");
   const [newColDimensions, setNewColDimensions] = useState("");
   const [newColNullable, setNewColNullable] = useState(true);
+  const [newColDefault, setNewColDefault] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
@@ -107,6 +111,7 @@ export function AlterTableDialog({
       setNewColType("TEXT");
       setNewColDimensions("");
       setNewColNullable(true);
+      setNewColDefault("");
       setError("");
     }
   }, [open, table, originalColumns]);
@@ -123,6 +128,7 @@ export function AlterTableDialog({
         dimensions: newColType === "VECTOR" ? newColDimensions : "",
         nullable: newColNullable,
         key: "",
+        defaultValue: newColDefault,
         status: "added",
       },
     ]);
@@ -130,6 +136,7 @@ export function AlterTableDialog({
     setNewColType("TEXT");
     setNewColDimensions("");
     setNewColNullable(true);
+    setNewColDefault("");
   };
 
   // Mark column for drop
@@ -250,7 +257,11 @@ export function AlterTableDialog({
         stmts.push(`ALTER TABLE ${tbl} DROP COLUMN ${quoteId(c.originalName)}`);
       } else if (c.status === "added") {
         let sql = `ALTER TABLE ${tbl} ADD COLUMN ${quoteId(c.name)} ${typeStr}`;
+        // NOT NULL goes first: Stoolap reads "DEFAULT 0 NOT NULL" as one expression.
         if (!c.nullable) sql += " NOT NULL";
+        // Stoolap refuses NOT NULL without a non-NULL DEFAULT on a table with rows
+        if (c.defaultValue?.trim())
+          sql += ` DEFAULT ${formatDefaultValue(c.defaultValue)}`;
         stmts.push(sql);
       } else if (c.status === "renamed") {
         // Emit RENAME first
@@ -584,6 +595,13 @@ export function AlterTableDialog({
                   </div>
                 </>
               )}
+              <Input
+                placeholder="default"
+                value={newColDefault}
+                onChange={(e) => setNewColDefault(e.target.value)}
+                className="w-[100px] h-9 font-data"
+                title="Required for a NOT NULL column when the table has rows"
+              />
               <label className="flex items-center gap-1.5 text-sm whitespace-nowrap">
                 <Checkbox
                   checked={newColNullable}

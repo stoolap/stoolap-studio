@@ -3,6 +3,22 @@ export function quoteId(name: string): string {
   return `"${name.replace(/"/g, '""')}"`;
 }
 
+/**
+ * Format a user-typed DEFAULT value: numbers, NULL/TRUE/FALSE, the
+ * CURRENT_* keywords and already-quoted strings pass through; anything else
+ * becomes a quoted string literal.
+ */
+export function formatDefaultValue(value: string): string {
+  const dv = value.trim();
+  const isRaw =
+    /^-?\d+(\.\d+)?$/.test(dv) ||
+    /^(NULL|TRUE|FALSE|CURRENT_TIMESTAMP|CURRENT_DATE|CURRENT_TIME)$/i.test(
+      dv,
+    ) ||
+    (dv.startsWith("'") && dv.endsWith("'"));
+  return isRaw ? dv : `'${dv.replace(/'/g, "''")}'`;
+}
+
 /** Extract a safe error message: first line only, file system paths stripped. */
 export function safeErrorMessage(e: unknown, fallback: string): string {
   if (!(e instanceof Error)) return fallback;

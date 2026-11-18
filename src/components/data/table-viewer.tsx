@@ -117,6 +117,14 @@ interface TableViewerProps {
   initialFilter?: { column: string; value: string };
 }
 
+/**
+ * datetime-local gives local wall-clock time (and drops ":00" seconds), while
+ * the engine reads an AS OF timestamp without an offset as UTC.
+ */
+function localToUtcIso(value: string): string {
+  return new Date(value).toISOString();
+}
+
 export function TableViewer({
   table,
   columns,
@@ -860,7 +868,7 @@ export function TableViewer({
               className="h-7 w-[220px] text-xs font-data"
               onKeyDown={(e) => {
                 if (e.key === "Enter" && asOfTimestamp) {
-                  setAppliedAsOf(asOfTimestamp.replace("T", " "));
+                  setAppliedAsOf(localToUtcIso(asOfTimestamp));
                   setOffset(0);
                 }
               }}
@@ -870,7 +878,7 @@ export function TableViewer({
               className="h-7 text-xs gap-1"
               disabled={!asOfTimestamp}
               onClick={() => {
-                setAppliedAsOf(asOfTimestamp.replace("T", " "));
+                setAppliedAsOf(localToUtcIso(asOfTimestamp));
                 setOffset(0);
               }}
             >
@@ -983,7 +991,7 @@ export function TableViewer({
         {appliedAsOf && (
           <span className="ml-2 text-amber-500 text-[11px] flex items-center gap-1">
             <Clock className="h-3 w-3" />
-            AS OF {appliedAsOf}
+            AS OF {new Date(appliedAsOf).toLocaleString()}
           </span>
         )}
       </div>

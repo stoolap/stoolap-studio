@@ -21,6 +21,7 @@ import * as api from "@/lib/api-client";
 import {
   DEFAULT_DUMP_OPTIONS,
   generateHeader,
+  generateTableDrops,
   generateTableSection,
   generateTableIndexes,
   generateViewSection,
@@ -73,6 +74,10 @@ export function BackupDialog({ open, onOpenChange }: BackupDialogProps) {
         // Sort tables by FK dependencies (referenced tables first)
         setProgress("Analyzing table dependencies...");
         const tableOrder = await sortTablesByFKDeps(activeId, tables);
+
+        if (options.dropBeforeCreate) {
+          parts.push(generateTableDrops(tableOrder));
+        }
 
         for (let i = 0; i < tableOrder.length; i++) {
           const tableName = tableOrder[i];
