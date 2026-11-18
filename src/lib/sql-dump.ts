@@ -161,9 +161,6 @@ export function generateTableSection(
 
   const patchedDdl = patchVectorDimensions(ddl, columns, rows, columnTypes);
 
-  if (options.dropBeforeCreate) {
-    parts.push(`DROP TABLE IF EXISTS ${quoteId(tableName)};`);
-  }
   // DDL from SHOW CREATE TABLE does not end with semicolon
   parts.push(`${patchedDdl};`);
   parts.push("");
@@ -177,9 +174,25 @@ export function generateTableSection(
 }
 
 /**
+ * Generate DROP TABLE statements for tables given in dependency order
+ * (referenced tables first). Drops run in reverse, so a table is dropped only
+ * after every table whose foreign key references it: Stoolap 0.5.0 refuses to
+ * drop a table that is still referenced.
+ */
+export function generateTableDrops(tablesInDependencyOrder: string[]): string {
+  if (tablesInDependencyOrder.length === 0) return "";
+  const lines = [...tablesInDependencyOrder]
+    .reverse()
+    .map((t) => `DROP TABLE IF EXISTS ${quoteId(t)};`);
+  return lines.join("\n") + "\n";
+}
+
+/**
  * Generate CREATE INDEX statements for a table.
  * Handles multi-column indexes (columnName = "(a, b)"), HNSW, and unique indexes.
- * Skips auto-created primary key (pk_*) indexes.
+ * Skips auto-created primary key (pk_*) indexes. Uses IF NOT EXISTS because
+ * CREATE TABLE already recreates the UNIQUE (unique_*) and FOREIGN KEY (fk_*)
+ * indexes that SHOW INDEXES lists.
  */
 export function generateTableIndexes(
   tableName: string,
@@ -228,12 +241,19 @@ export function generateTableIndexes(
         if (opts.length > 0) withClause = ` WITH (${opts.join(", ")})`;
       }
       lines.push(
-        `CREATE INDEX ${quoteId(idx.indexName)} ON ${quoteId(tableName)}(${columnList}) USING HNSW${withClause};`,
+        `CREATE INDEX IF NOT EXISTS ${quoteId(idx.indexName)} ON ${quoteId(tableName)}(${columnList}) USING HNSW${withClause};`,
       );
     } else {
       const unique = idx.isUnique ? "UNIQUE " : "";
+      // Keep the index type explicit: the default for TEXT columns changed
+      // from HASH to BTREE in Stoolap 0.5.0. MULTICOLUMN is not a USING type.
+      const type = idx.indexType.toUpperCase();
+      const using =
+        type === "BTREE" || type === "HASH" || type === "BITMAP"
+          ? ` USING ${type}`
+          : "";
       lines.push(
-        `CREATE ${unique}INDEX ${quoteId(idx.indexName)} ON ${quoteId(tableName)}(${columnList});`,
+        `CREATE ${unique}INDEX IF NOT EXISTS ${quoteId(idx.indexName)} ON ${quoteId(tableName)}(${columnList})${using};`,
       );
     }
   }

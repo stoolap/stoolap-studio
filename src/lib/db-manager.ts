@@ -1,4 +1,4 @@
-import { Database } from "@stoolap/node";
+import { Database, type Transaction } from "@stoolap/node";
 import { v4 as uuidv4 } from "uuid";
 import type { ConnectionMeta } from "./types";
 
@@ -56,26 +56,17 @@ class DbManager {
     }
   }
 
-  private withTimeout<T>(promise: Promise<T>): Promise<T> {
-    return new Promise<T>((resolve, reject) => {
-      const timer = setTimeout(
-        () => reject(new Error("Query timeout exceeded (55s)")),
-        QUERY_TIMEOUT_MS,
-      );
-      if (typeof timer === "object" && "unref" in timer) {
-        (timer as NodeJS.Timeout).unref();
-      }
-      promise.then(
-        (val) => {
-          clearTimeout(timer);
-          resolve(val);
-        },
-        (err) => {
-          clearTimeout(timer);
-          reject(err);
-        },
-      );
-    });
+  /** Count an in-flight operation so idle eviction never closes a busy connection. */
+  private async track<T>(connId: string, op: () => Promise<T>): Promise<T> {
+    this.touch(connId);
+    this.pendingOps.set(connId, (this.pendingOps.get(connId) ?? 0) + 1);
+    try {
+      return await op();
+    } finally {
+      const count = (this.pendingOps.get(connId) ?? 1) - 1;
+      if (count <= 0) this.pendingOps.delete(connId);
+      else this.pendingOps.set(connId, count);
+    }
   }
 
   async open(path: string, name?: string): Promise<ConnectionMeta> {
@@ -90,6 +81,13 @@ class DbManager {
     // Each in-memory DB gets a unique DSN so they don't share data
     const dsn = isMemory ? `memory://${id}` : path;
     const db = await Database.open(dsn);
+    try {
+      // The engine cancels any statement that runs past this deadline.
+      await db.execute(`PRAGMA query_timeout = ${QUERY_TIMEOUT_MS}`);
+    } catch (e) {
+      await db.close().catch(() => {});
+      throw e;
+    }
     const meta: ConnectionMeta = {
       id,
       name: name || (isMemory ? "In-Memory" : path.split("/").pop() || path),
@@ -114,15 +112,7 @@ class DbManager {
     params?: unknown[],
   ): Promise<{ columns: string[]; rows: unknown[][] }> {
     const db = this.getDb(connId);
-    this.touch(connId);
-    this.pendingOps.set(connId, (this.pendingOps.get(connId) ?? 0) + 1);
-    try {
-      return await this.withTimeout(db.queryRaw(sql, params));
-    } finally {
-      const count = (this.pendingOps.get(connId) ?? 1) - 1;
-      if (count <= 0) this.pendingOps.delete(connId);
-      else this.pendingOps.set(connId, count);
-    }
+    return this.track(connId, () => db.queryRaw(sql, params));
   }
 
   async execute(
@@ -131,15 +121,55 @@ class DbManager {
     params?: unknown[],
   ): Promise<{ changes: number }> {
     const db = this.getDb(connId);
-    this.touch(connId);
-    this.pendingOps.set(connId, (this.pendingOps.get(connId) ?? 0) + 1);
-    try {
-      return await this.withTimeout(db.execute(sql, params));
-    } finally {
-      const count = (this.pendingOps.get(connId) ?? 1) - 1;
-      if (count <= 0) this.pendingOps.delete(connId);
-      else this.pendingOps.set(connId, count);
-    }
+    return this.track(connId, () => db.execute(sql, params));
+  }
+
+  /**
+   * Run `fn` on a clone of the connection's handle. The clone shares the
+   * engine but has its own transaction state, so a BEGIN issued on it (DDL
+   * included) is not joined by requests running concurrently on the
+   * connection.
+   */
+  async session<T>(connId: string, fn: (db: Database) => Promise<T>): Promise<T> {
+    const db = this.getDb(connId);
+    return this.track(connId, async () => {
+      const clone = db.clone();
+      try {
+        // A clone does not inherit the handle's query timeout.
+        await clone.execute(`PRAGMA query_timeout = ${QUERY_TIMEOUT_MS}`);
+        return await fn(clone);
+      } finally {
+        await clone.close().catch(() => {});
+      }
+    });
+  }
+
+  /**
+   * Run `fn` inside its own transaction: committed when it resolves, rolled
+   * back when it throws. Requests running concurrently on the same
+   * connection do not see or join it. DML only: the driver's Transaction
+   * refuses DDL.
+   */
+  async transaction<T>(
+    connId: string,
+    fn: (tx: Transaction) => Promise<T>,
+  ): Promise<T> {
+    const db = this.getDb(connId);
+    return this.track(connId, async () => {
+      const tx = await db.begin();
+      try {
+        const result = await fn(tx);
+        await tx.commit();
+        return result;
+      } catch (e) {
+        try {
+          await tx.rollback();
+        } catch {
+          /* ignore rollback errors */
+        }
+        throw e;
+      }
+    });
   }
 
   async close(connId: string): Promise<void> {

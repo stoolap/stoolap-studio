@@ -34,7 +34,7 @@ export async function GET(req: NextRequest) {
     const asOf = req.nextUrl.searchParams.get("asOf");
     if (
       asOf &&
-      !/^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(:\d{2}(\.\d+)?)?$/.test(asOf)
+      !/^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(\.\d+)?Z?$/.test(asOf)
     ) {
       return NextResponse.json(
         { error: "Invalid timestamp format" },
@@ -256,8 +256,7 @@ export async function POST(req: NextRequest) {
         else groups.set(key, [row]);
       }
 
-      await dbManager.execute(connId, "BEGIN");
-      try {
+      await dbManager.transaction(connId, async (tx) => {
         const BATCH_SIZE = 500;
         for (const [, groupRows] of groups) {
           const cols = Object.keys(groupRows[0]);
@@ -276,19 +275,11 @@ export async function POST(req: NextRequest) {
               for (const col of cols) allVals.push(row[col]);
             }
             const sql = `INSERT INTO ${quoteId(table)} (${quotedCols}) VALUES ${rowPlaceholders.join(", ")}`;
-            const result = await dbManager.execute(connId, sql, allVals);
+            const result = await tx.execute(sql, allVals);
             totalChanges += result.changes;
           }
         }
-        await dbManager.execute(connId, "COMMIT");
-      } catch (e) {
-        try {
-          await dbManager.execute(connId, "ROLLBACK");
-        } catch {
-          /* ignore rollback errors */
-        }
-        throw e;
-      }
+      });
       const time = Math.round((performance.now() - start) * 100) / 100;
       return NextResponse.json({ changes: totalChanges, time });
     }

@@ -59,15 +59,14 @@ CREATE TABLE products (
 
 CREATE TABLE orders (
   id INTEGER PRIMARY KEY AUTO_INCREMENT,
-  customer_id INTEGER NOT NULL,
-  product_id INTEGER NOT NULL,
+  customer_id INTEGER NOT NULL REFERENCES customers(id),
+  product_id INTEGER NOT NULL REFERENCES products(id),
   quantity INTEGER NOT NULL DEFAULT 1,
   total FLOAT NOT NULL,
   status TEXT DEFAULT 'pending',
   ordered_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
-CREATE INDEX idx_orders_customer ON orders(customer_id);
 CREATE INDEX idx_orders_status ON orders(status);
 CREATE INDEX idx_products_category ON products(category);
 

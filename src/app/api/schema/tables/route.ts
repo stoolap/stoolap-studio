@@ -14,7 +14,10 @@ export async function GET(req: NextRequest) {
   }
   try {
     const result = await dbManager.query(connId, "SHOW TABLES");
-    const tables = result.rows.map((r) => String(r[0]));
+    // Hide the engine's statistics tables (_sys_table_stats, ... after ANALYZE)
+    const tables = result.rows
+      .map((r) => String(r[0]))
+      .filter((t) => !t.startsWith("_sys_"));
     return NextResponse.json(tables);
   } catch (e) {
     return NextResponse.json(

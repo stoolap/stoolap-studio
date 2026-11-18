@@ -29,6 +29,7 @@ import { Plus, Trash2, Link2 } from "lucide-react";
 import { useConnectionStore } from "@/stores/connection-store";
 import { useTables, useTableColumns } from "@/hooks/use-schema";
 import { quoteId, errorMessage } from "@/lib/utils";
+import { formatDefaultValue } from "@/lib/sql-utils";
 import { DATA_TYPES, VECTOR_DIM_PRESETS } from "@/lib/constants";
 import * as api from "@/lib/api-client";
 
@@ -216,14 +217,7 @@ export function CreateTableDialog({
         if (c.notNull && !c.primaryKey) def += " NOT NULL";
         if (c.unique && !c.primaryKey) def += " UNIQUE";
         if (c.defaultValue) {
-          const dv = c.defaultValue.trim();
-          const isRaw =
-            /^-?\d+(\.\d+)?$/.test(dv) ||
-            /^(NULL|TRUE|FALSE|CURRENT_TIMESTAMP|CURRENT_DATE|CURRENT_TIME)$/i.test(
-              dv,
-            ) ||
-            (dv.startsWith("'") && dv.endsWith("'"));
-          def += ` DEFAULT ${isRaw ? dv : `'${dv.replace(/'/g, "''")}'`}`;
+          def += ` DEFAULT ${formatDefaultValue(c.defaultValue)}`;
         }
         return def;
       });
