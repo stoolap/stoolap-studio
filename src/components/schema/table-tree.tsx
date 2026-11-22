@@ -1,6 +1,6 @@
-"use client";
 
-import { useState, useMemo } from "react";
+import { useState, useMemo, type ComponentProps } from "react";
+import { useTranslation } from "react-i18next";
 import {
   useTables,
   useViews,
@@ -12,14 +12,6 @@ import {
 import { useEditorStore } from "@/stores/editor-store";
 import { useConnectionStore } from "@/stores/connection-store";
 import { Input } from "@/components/ui/input";
-import {
-  ContextMenu,
-  ContextMenuContent,
-  ContextMenuItem,
-  ContextMenuSeparator,
-  ContextMenuTrigger,
-} from "@/components/ui/context-menu";
-import { ConfirmDialog } from "@/components/dialogs/confirm-dialog";
 import { CreateTableDialog } from "@/components/dialogs/create-table";
 import { AlterTableDialog } from "@/components/dialogs/alter-table";
 import { CreateViewDialog } from "@/components/dialogs/create-view";
@@ -41,11 +33,15 @@ import {
   Waypoints,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { cn, quoteId, errorMessage } from "@/lib/utils";
+import { cn, errorMessage, quoteId } from "@/lib/utils";
+import { locale } from "@/lib/i18n";
+import * as native from "@/lib/native";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import * as api from "@/lib/api-client";
 import type { ColumnInfo, IndexInfo, ForeignKeyInfo } from "@/lib/types";
+import { Tip } from "@/components/ui/tip";
+import { indexQuery } from "@/lib/sql-utils";
 
 /** Build a valid example vector string from a VECTOR(N) type. */
 function exampleVector(type: string): string {
@@ -65,7 +61,7 @@ function ColumnItem({
 }) {
   const isVector = col.type.toUpperCase().startsWith("VECTOR");
   return (
-    <div className="flex items-center gap-1.5 pl-8 pr-2 py-1 text-xs text-muted-foreground hover:bg-accent/50 transition-colors min-w-0 overflow-hidden">
+    <div className="flex items-center gap-1.5 pl-7 pr-2 py-1 text-xs text-muted-foreground hover:bg-accent/50 min-w-0 overflow-hidden">
       {col.key === "PRI" ? (
         <Key className="h-3 w-3 text-yellow-500 shrink-0" />
       ) : isForeignKey ? (
@@ -75,17 +71,17 @@ function ColumnItem({
       ) : (
         <Columns3 className="h-3 w-3 shrink-0 opacity-40" />
       )}
-      <span className="truncate font-data">{col.field}</span>
-      <span className="ml-auto text-[10px] opacity-50 shrink-0 font-data">
+      <MiddleTruncate text={col.field} className="font-data" />
+      <span className="ml-auto text-xs opacity-50 shrink-0 font-data">
         {col.type}
       </span>
       {isForeignKey && (
-        <span className="text-[10px] text-blue-400 shrink-0 font-semibold">
+        <span className="text-xs text-blue-400 shrink-0 font-semibold">
           FK
         </span>
       )}
       {!col.nullable && (
-        <span className="text-[10px] text-orange-400 shrink-0 font-semibold">
+        <span className="text-xs text-orange-400 shrink-0 font-semibold">
           NN
         </span>
       )}
@@ -93,96 +89,123 @@ function ColumnItem({
   );
 }
 
+/**
+ * A name cut in the middle, as Finder does: its end, which often tells
+ * similar names apart (orders_2025, orders_2026), stays and the start gives
+ * way with "…". A short one is just cut at the end.
+ */
+function MiddleTruncate({ text, className, ...props }: { text: string } & ComponentProps<"span">) {
+  const tail = 7;
+  if (text.length <= tail * 2) {
+    return (
+      <span className={cn("truncate", className)} {...props}>
+        {text}
+      </span>
+    );
+  }
+  return (
+    <span className={cn("flex min-w-0", className)} {...props}>
+      <span className="truncate">{text.slice(0, -tail)}</span>
+      <span className="shrink-0">{text.slice(-tail)}</span>
+    </span>
+  );
+}
+
 function IndexItem({
   idx,
   tableName,
-  colType,
+  tableColumns,
   onDrop,
 }: {
   idx: IndexInfo;
   tableName: string;
-  colType?: string;
+  /** The table's columns, for the indexed ones' types */
+  tableColumns?: ColumnInfo[];
   onDrop: () => void;
 }) {
+  const { t } = useTranslation("schema");
   const [expanded, setExpanded] = useState(false);
   const addTab = useEditorStore((s) => s.addTab);
   const isHnsw = idx.indexType.toUpperCase() === "HNSW";
+  const typeOf = (column: string) => tableColumns?.find((c) => c.field === column)?.type;
+  // An HNSW index is on one vector column
+  const colType = typeOf(idx.columns[0] ?? idx.columnName);
 
   const handleQueryUsingIndex = () => {
     if (isHnsw) {
       const vec = colType ? exampleVector(colType) : "[0.1]";
       addTab(
-        `k-NN: ${idx.columnName}`,
+        t("tableTree.tabKnn", { column: idx.columnName }),
         `-- Replace the query vector with your own\nSELECT *, VEC_DISTANCE_COSINE(${quoteId(idx.columnName)}, '${vec}') AS distance\nFROM ${quoteId(tableName)}\nORDER BY distance\nLIMIT 10`,
       );
     } else {
-      addTab(
-        idx.indexName,
-        `SELECT * FROM ${quoteId(tableName)} WHERE ${quoteId(idx.columnName)} = ?`,
-      );
+      addTab(idx.indexName, indexQuery(tableName, idx.indexName, idx.columns, typeOf));
     }
+  };
+
+  const handleContextMenu = async (e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const selected = await native.showContextMenu([
+      {
+        id: "query",
+        label: isHnsw ? t("tableTree.knnSearch") : t("tableTree.queryUsingIndex"),
+      },
+      { id: "sep", label: "", type: "separator" },
+      { id: "drop", label: t("tableTree.dropIndex") },
+    ]);
+    if (selected === "query") handleQueryUsingIndex();
+    if (selected === "drop") onDrop();
   };
 
   return (
     <div className="overflow-hidden">
-      <ContextMenu>
-        <ContextMenuTrigger>
-          <div
-            className="flex items-center gap-1.5 pl-8 pr-2 py-1 text-xs text-muted-foreground hover:bg-accent/50 cursor-pointer select-none transition-colors min-w-0 overflow-hidden"
-            onClick={() => setExpanded(!expanded)}
-          >
-            {expanded ? (
-              <ChevronDown className="h-3 w-3 shrink-0 opacity-40" />
-            ) : (
-              <ChevronRight className="h-3 w-3 shrink-0 opacity-40" />
-            )}
-            {isHnsw ? (
-              <Waypoints className="h-3 w-3 shrink-0 text-purple-400" />
-            ) : (
-              <Hash className="h-3 w-3 shrink-0 opacity-40" />
-            )}
-            <span className="truncate font-data">{idx.indexName}</span>
-            {idx.isUnique && (
-              <span className="text-[10px] text-yellow-500 shrink-0 font-semibold">
-                UQ
-              </span>
-            )}
-            <span
-              className={cn(
-                "ml-auto text-[10px] shrink-0 font-data",
-                isHnsw ? "text-purple-400" : "opacity-50",
-              )}
-            >
-              {idx.indexType}
-            </span>
-          </div>
-        </ContextMenuTrigger>
-        <ContextMenuContent>
-          <ContextMenuItem onClick={handleQueryUsingIndex}>
-            {isHnsw ? "k-NN similarity search" : "Query using index"}
-          </ContextMenuItem>
-          <ContextMenuSeparator />
-          <ContextMenuItem className="text-destructive" onClick={onDrop}>
-            Drop Index
-          </ContextMenuItem>
-        </ContextMenuContent>
-      </ContextMenu>
+      <div
+        className="flex items-center gap-1.5 pl-7 pr-2 py-1 text-xs text-muted-foreground hover:bg-accent/50 cursor-pointer select-none min-w-0 overflow-hidden"
+        onClick={() => setExpanded(!expanded)}
+        onContextMenu={handleContextMenu}
+      >
+        {expanded ? (
+          <ChevronDown className="h-2.5 w-2.5 shrink-0 opacity-40" />
+        ) : (
+          <ChevronRight className="h-2.5 w-2.5 shrink-0 opacity-40" />
+        )}
+        {isHnsw ? (
+          <Waypoints className="h-2.5 w-2.5 shrink-0 text-purple-400" />
+        ) : (
+          <Hash className="h-2.5 w-2.5 shrink-0 opacity-40" />
+        )}
+        <MiddleTruncate text={idx.indexName} className="font-data" />
+        {idx.isUnique && (
+          <span className="text-xs text-yellow-500 shrink-0 font-semibold">
+            UQ
+          </span>
+        )}
+        <span
+          className={cn(
+            "ml-auto text-xs shrink-0 font-data",
+            isHnsw ? "text-purple-400" : "opacity-50",
+          )}
+        >
+          {idx.indexType}
+        </span>
+      </div>
       {expanded && (
         <div className="pl-14 pr-2 py-0.5 space-y-0.5">
-          <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
-            <span className="opacity-50 w-14">Column:</span>
+          <div className="flex items-center gap-2 text-xs text-muted-foreground">
+            <span className="opacity-50 w-14">{t("tableTree.column")}</span>
             <span className="font-data">{idx.columnName}</span>
           </div>
-          <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
-            <span className="opacity-50 w-14">Type:</span>
+          <div className="flex items-center gap-2 text-xs text-muted-foreground">
+            <span className="opacity-50 w-14">{t("tableTree.type")}</span>
             <span className={cn("font-data", isHnsw && "text-purple-400")}>
               {idx.indexType}
             </span>
           </div>
           {!isHnsw && (
-            <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
-              <span className="opacity-50 w-14">Unique:</span>
-              <span className="font-data">{idx.isUnique ? "Yes" : "No"}</span>
+            <div className="flex items-center gap-2 text-xs text-muted-foreground">
+              <span className="opacity-50 w-14">{t("tableTree.unique")}</span>
+              <span className="font-data">{idx.isUnique ? t("tableTree.yes") : t("tableTree.no")}</span>
             </div>
           )}
         </div>
@@ -192,19 +215,20 @@ function IndexItem({
 }
 
 function ForeignKeyItem({ fk }: { fk: ForeignKeyInfo }) {
+  const { t } = useTranslation("schema");
   const [expanded, setExpanded] = useState(false);
   return (
     <div className="overflow-hidden">
       <div
-        className="flex items-center gap-1.5 pl-8 pr-2 py-1 text-xs text-muted-foreground hover:bg-accent/50 cursor-pointer select-none transition-colors min-w-0 overflow-hidden"
+        className="flex items-center gap-1.5 pl-7 pr-2 py-1 text-xs text-muted-foreground hover:bg-accent/50 cursor-pointer select-none min-w-0 overflow-hidden"
         onClick={() => setExpanded(!expanded)}
       >
         {expanded ? (
-          <ChevronDown className="h-3 w-3 shrink-0 opacity-40" />
+          <ChevronDown className="h-2.5 w-2.5 shrink-0 opacity-40" />
         ) : (
-          <ChevronRight className="h-3 w-3 shrink-0 opacity-40" />
+          <ChevronRight className="h-2.5 w-2.5 shrink-0 opacity-40" />
         )}
-        <Link2 className="h-3 w-3 shrink-0 text-blue-400" />
+        <Link2 className="h-2.5 w-2.5 shrink-0 text-blue-400" />
         <span className="truncate font-data">{fk.columnName}</span>
         <ArrowRight className="h-2.5 w-2.5 shrink-0 opacity-40" />
         <span className="truncate font-data text-blue-400">
@@ -213,12 +237,12 @@ function ForeignKeyItem({ fk }: { fk: ForeignKeyInfo }) {
       </div>
       {expanded && (
         <div className="pl-14 pr-2 py-0.5 space-y-0.5">
-          <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
-            <span className="opacity-50 w-20">On Delete:</span>
+          <div className="flex items-center gap-2 text-xs text-muted-foreground">
+            <span className="opacity-50 w-20">{t("tableTree.onDelete")}</span>
             <span className="font-data">{fk.onDelete}</span>
           </div>
-          <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
-            <span className="opacity-50 w-20">On Update:</span>
+          <div className="flex items-center gap-2 text-xs text-muted-foreground">
+            <span className="opacity-50 w-20">{t("tableTree.onUpdate")}</span>
             <span className="font-data">{fk.onUpdate}</span>
           </div>
         </div>
@@ -236,12 +260,10 @@ function TableNode({
   type: "table" | "view";
   onRefresh: () => void;
 }) {
+  const { t } = useTranslation("schema");
   const [expanded, setExpanded] = useState(false);
   const [alterOpen, setAlterOpen] = useState(false);
   const [indexOpen, setIndexOpen] = useState(false);
-  const [confirmDrop, setConfirmDrop] = useState(false);
-  const [confirmTruncate, setConfirmTruncate] = useState(false);
-  const [confirmDropIndex, setConfirmDropIndex] = useState<string | null>(null);
   const [vecSearchOpen, setVecSearchOpen] = useState(false);
   const needsColumns = expanded || alterOpen || indexOpen;
   const { data: columns } = useTableColumns(needsColumns ? name : null, type);
@@ -276,9 +298,9 @@ function TableNode({
     if (!activeId) return;
     try {
       const ddl = await api.fetchDDL(activeId, name, type);
-      addTab(`DDL: ${name}`, ddl);
+      addTab(t("tableTree.tabDdl", { name }), ddl);
     } catch (e) {
-      toast.error("Failed to fetch DDL", {
+      toast.error(t("tableTree.ddlFailed"), {
         description: errorMessage(e),
       });
     }
@@ -287,12 +309,13 @@ function TableNode({
   const doTruncateTable = async () => {
     if (!activeId) return;
     try {
-      await api.executeQuery(activeId, `TRUNCATE TABLE ${quoteId(name)}`);
-      queryClient.invalidateQueries({ queryKey: ["tableData"] });
+      await api.runSql(activeId, `TRUNCATE TABLE ${quoteId(name)}`);
+      queryClient.invalidateQueries({ queryKey: ["tableRows"] });
+      queryClient.invalidateQueries({ queryKey: ["tableRowCount"] });
       queryClient.invalidateQueries({ queryKey: ["rowcount"] });
-      toast.success(`Table "${name}" truncated`);
+      toast.success(t("tableTree.truncated", { name }));
     } catch (e) {
-      toast.error("Failed to truncate table", {
+      toast.error(t("tableTree.truncateFailed"), {
         description: errorMessage(e),
       });
     }
@@ -305,11 +328,11 @@ function TableNode({
         type === "table"
           ? `DROP TABLE ${quoteId(name)}`
           : `DROP VIEW ${quoteId(name)}`;
-      await api.executeQuery(activeId, sql);
+      await api.runSql(activeId, sql);
       onRefresh();
-      toast.success(`${type === "table" ? "Table" : "View"} "${name}" dropped`);
+      toast.success(t(type === "table" ? "tableTree.tableDropped" : "tableTree.viewDropped", { name }));
     } catch (e) {
-      toast.error(`Failed to drop ${type}`, {
+      toast.error(t(type === "table" ? "tableTree.dropTableFailed" : "tableTree.dropViewFailed"), {
         description: errorMessage(e),
       });
     }
@@ -318,14 +341,14 @@ function TableNode({
   const doDropIndex = async (indexName: string) => {
     if (!activeId) return;
     try {
-      await api.executeQuery(
+      await api.runSql(
         activeId,
         `DROP INDEX ${quoteId(indexName)} ON ${quoteId(name)}`,
       );
       queryClient.invalidateQueries({ queryKey: ["indexes"] });
-      toast.success(`Index "${indexName}" dropped`);
+      toast.success(t("tableTree.indexDropped", { name: indexName }));
     } catch (e) {
-      toast.error("Failed to drop index", {
+      toast.error(t("tableTree.dropIndexFailed"), {
         description: errorMessage(e),
       });
     }
@@ -333,92 +356,143 @@ function TableNode({
 
   const handleInsertRow = () => {
     addTab(
-      `Insert: ${name}`,
+      t("tableTree.tabInsert", { name }),
       columns
         ? `INSERT INTO ${quoteId(name)} (${columns.map((c) => quoteId(c.field)).join(", ")})\nVALUES (${columns.map((c, i) => `$${i + 1} /* ${c.type} */`).join(", ")})`
         : `INSERT INTO ${quoteId(name)} VALUES ()`,
     );
   };
 
+  const handleContextMenu = async (e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+
+    const hasVectorCols = columns?.some((c) =>
+      c.type.toUpperCase().startsWith("VECTOR"),
+    );
+
+    const items: Array<{
+      id: string;
+      label: string;
+      type?: "separator" | "normal";
+      enabled?: boolean;
+    }> = [];
+
+    if (type === "table") {
+      items.push({ id: "viewData", label: t("tableTree.viewData") });
+    }
+    items.push({ id: "select", label: `SELECT * FROM ${name}` });
+    items.push({ id: "ddl", label: t("tableTree.showDdl") });
+
+    if (type === "table") {
+      items.push({ id: "sep1", label: "", type: "separator" });
+      if (hasVectorCols) {
+        items.push({ id: "vecSearch", label: t("tableTree.vectorSearch") });
+      }
+      items.push({ id: "insert", label: t("tableTree.insertRow") });
+      items.push({ id: "createIndex", label: t("tableTree.createIndex") });
+      items.push({ id: "editTable", label: t("tableTree.editTable") });
+    }
+
+    items.push({ id: "sep2", label: "", type: "separator" });
+    if (type === "table") {
+      items.push({ id: "truncate", label: t("tableTree.truncateTable") });
+    }
+    items.push({
+      id: "drop",
+      label: t(type === "table" ? "tableTree.dropTable" : "tableTree.dropView"),
+    });
+
+    const selected = await native.showContextMenu(items);
+
+    switch (selected) {
+      case "viewData":
+        handleViewData();
+        break;
+      case "select":
+        handleSelectQuery();
+        break;
+      case "ddl":
+        handleShowDDL();
+        break;
+      case "vecSearch":
+        setVecSearchOpen(true);
+        break;
+      case "insert":
+        handleInsertRow();
+        break;
+      case "createIndex":
+        setIndexOpen(true);
+        break;
+      case "editTable":
+        setAlterOpen(true);
+        break;
+      case "truncate": {
+        const confirmed = await native.showConfirmDialog({
+          title: t("tableTree.truncateTable"),
+          message: t("tableTree.confirmTruncate", { name }),
+          detail: t("tableTree.cannotUndo"),
+          confirmLabel: t("tableTree.truncate"),
+          destructive: true,
+        });
+        if (confirmed) doTruncateTable();
+        break;
+      }
+      case "drop": {
+        const label = t(type === "table" ? "tableTree.dropTable" : "tableTree.dropView");
+        const confirmed = await native.showConfirmDialog({
+          title: label,
+          message: t(type === "table" ? "tableTree.confirmDropTable" : "tableTree.confirmDropView", { name }),
+          detail: t("tableTree.cannotUndo"),
+          confirmLabel: label,
+          destructive: true,
+        });
+        if (confirmed) doDropTable();
+        break;
+      }
+    }
+  };
+
+  const handleDropIndex = async (indexName: string) => {
+    const confirmed = await native.showConfirmDialog({
+      title: t("tableTree.dropIndex"),
+      message: t("tableTree.confirmDropIndex", { name: indexName }),
+      confirmLabel: t("tableTree.dropIndex"),
+      destructive: true,
+    });
+    if (confirmed) doDropIndex(indexName);
+  };
+
   return (
     <div className="overflow-hidden">
-      <ContextMenu>
-        <ContextMenuTrigger>
-          <div
-            className={cn(
-              "flex items-center gap-1.5 px-2.5 py-1.5 cursor-pointer hover:bg-accent text-sm select-none transition-colors min-w-0 overflow-hidden",
-            )}
-            onClick={() => setExpanded(!expanded)}
-            onDoubleClick={handleDoubleClick}
-          >
-            {expanded ? (
-              <ChevronDown className="h-3.5 w-3.5 shrink-0 opacity-50" />
-            ) : (
-              <ChevronRight className="h-3.5 w-3.5 shrink-0 opacity-50" />
-            )}
-            {type === "table" ? (
-              <Table2 className="h-3.5 w-3.5 text-blue-400 shrink-0" />
-            ) : (
-              <Eye className="h-3.5 w-3.5 text-purple-400 shrink-0" />
-            )}
-            <span className="truncate" title={name}>
-              {name}
-            </span>
-            {type === "table" && rowCount !== undefined && (
-              <span className="ml-auto text-[10px] text-muted-foreground/50 tabular-nums shrink-0 pr-1">
-                {rowCount.toLocaleString()}
-              </span>
-            )}
-          </div>
-        </ContextMenuTrigger>
-        <ContextMenuContent>
-          {type === "table" && (
-            <ContextMenuItem onClick={handleViewData}>
-              View Data
-            </ContextMenuItem>
-          )}
-          <ContextMenuItem onClick={handleSelectQuery}>
-            SELECT * FROM {name}
-          </ContextMenuItem>
-          <ContextMenuItem onClick={handleShowDDL}>Show DDL</ContextMenuItem>
-          {type === "table" && (
-            <>
-              <ContextMenuSeparator />
-              {columns?.some((c) =>
-                c.type.toUpperCase().startsWith("VECTOR"),
-              ) && (
-                <ContextMenuItem onClick={() => setVecSearchOpen(true)}>
-                  Vector Similarity Search
-                </ContextMenuItem>
-              )}
-              <ContextMenuItem onClick={handleInsertRow}>
-                Insert Row
-              </ContextMenuItem>
-              <ContextMenuItem onClick={() => setIndexOpen(true)}>
-                Create Index
-              </ContextMenuItem>
-              <ContextMenuItem onClick={() => setAlterOpen(true)}>
-                Edit Table
-              </ContextMenuItem>
-            </>
-          )}
-          <ContextMenuSeparator />
-          {type === "table" && (
-            <ContextMenuItem
-              className="text-destructive"
-              onClick={() => setConfirmTruncate(true)}
-            >
-              Truncate Table
-            </ContextMenuItem>
-          )}
-          <ContextMenuItem
-            className="text-destructive"
-            onClick={() => setConfirmDrop(true)}
-          >
-            Drop {type === "table" ? "Table" : "View"}
-          </ContextMenuItem>
-        </ContextMenuContent>
-      </ContextMenu>
+      <div
+        className={cn(
+          // A pill inset from the edges, as macOS' sidebars have
+          "mx-2 flex items-center gap-2 rounded-lg px-2 py-1 cursor-pointer hover:bg-accent text-sm select-none min-w-0 overflow-hidden",
+        )}
+        onClick={() => setExpanded(!expanded)}
+        onDoubleClick={handleDoubleClick}
+        onContextMenu={handleContextMenu}
+      >
+        {expanded ? (
+          <ChevronDown className="h-3 w-3 shrink-0 opacity-50" />
+        ) : (
+          <ChevronRight className="h-3 w-3 shrink-0 opacity-50" />
+        )}
+        {type === "table" ? (
+          <Table2 className="h-4 w-4 text-foreground/80 shrink-0" />
+        ) : (
+          <Eye className="h-4 w-4 text-foreground/80 shrink-0" />
+        )}
+        <Tip label={name} side="right" delay={700}>
+          <MiddleTruncate text={name} />
+        </Tip>
+        {type === "table" && rowCount !== undefined && (
+          <span className="ml-auto text-xs text-muted-foreground tabular-nums shrink-0 pr-0.5">
+            {rowCount.toLocaleString(locale())}
+          </span>
+        )}
+      </div>
 
       {expanded && (
         <div className="overflow-hidden">
@@ -431,8 +505,8 @@ function TableNode({
           ))}
           {foreignKeys && foreignKeys.length > 0 && (
             <>
-              <div className="pl-6 pr-2 pt-2 pb-0.5 text-[10px] text-muted-foreground/50 uppercase tracking-widest font-semibold">
-                Foreign Keys
+              <div className="pl-5 pr-2 pt-1.5 pb-0.5 text-xs font-semibold text-muted-foreground">
+                {t("tableTree.foreignKeys")}
               </div>
               {foreignKeys.map((fk) => (
                 <ForeignKeyItem key={fk.columnName} fk={fk} />
@@ -441,18 +515,17 @@ function TableNode({
           )}
           {indexes && indexes.length > 0 && (
             <>
-              <div className="pl-6 pr-2 pt-2 pb-0.5 text-[10px] text-muted-foreground/50 uppercase tracking-widest font-semibold">
-                Indexes
+              <div className="pl-5 pr-2 pt-1.5 pb-0.5 text-xs font-semibold text-muted-foreground">
+                {t("tableTree.indexes")}
               </div>
               {indexes.map((idx) => {
-                const col = columns?.find((c) => c.field === idx.columnName);
                 return (
                   <IndexItem
                     key={idx.indexName}
                     idx={idx}
                     tableName={name}
-                    colType={col?.type}
-                    onDrop={() => setConfirmDropIndex(idx.indexName)}
+                    tableColumns={columns}
+                    onDrop={() => handleDropIndex(idx.indexName)}
                   />
                 );
               })}
@@ -482,51 +555,17 @@ function TableNode({
         </>
       )}
 
-      <ConfirmDialog
-        open={confirmDrop}
-        onOpenChange={setConfirmDrop}
-        title={`Drop ${type === "table" ? "Table" : "View"}`}
-        description={`Are you sure you want to drop ${type} "${name}"? This cannot be undone.`}
-        confirmLabel={`Drop ${type === "table" ? "Table" : "View"}`}
-        destructive
-        onConfirm={doDropTable}
-      />
-
-      <ConfirmDialog
-        open={confirmTruncate}
-        onOpenChange={setConfirmTruncate}
-        title="Truncate Table"
-        description={`Are you sure you want to delete all rows from "${name}"? This cannot be undone.`}
-        confirmLabel="Truncate"
-        destructive
-        onConfirm={doTruncateTable}
-      />
-
       <VectorSearchDialog
         open={vecSearchOpen}
         onOpenChange={setVecSearchOpen}
         initialTable={name}
       />
-
-      {confirmDropIndex !== null && (
-        <ConfirmDialog
-          open
-          onOpenChange={() => setConfirmDropIndex(null)}
-          title="Drop Index"
-          description={`Are you sure you want to drop index "${confirmDropIndex}"?`}
-          confirmLabel="Drop Index"
-          destructive
-          onConfirm={() => {
-            doDropIndex(confirmDropIndex);
-            setConfirmDropIndex(null);
-          }}
-        />
-      )}
     </div>
   );
 }
 
 export function TableTree() {
+  const { t } = useTranslation("schema");
   const activeId = useConnectionStore((s) => s.activeId);
   const {
     data: tables,
@@ -553,7 +592,6 @@ export function TableTree() {
       queryClient.invalidateQueries({ queryKey: ["fks"] }),
       queryClient.invalidateQueries({ queryKey: ["rowcount"] }),
     ]);
-    toast.success("Schema refreshed");
   };
 
   const filteredTables = useMemo(() => {
@@ -573,77 +611,81 @@ export function TableTree() {
   if (!activeId) {
     return (
       <div className="flex flex-col items-center justify-center h-full text-muted-foreground text-sm p-4 text-center">
-        <p>No connection</p>
-        <p className="text-xs mt-1">Open a database to browse its schema</p>
+        <p>{t("tableTree.noConnection")}</p>
+        <p className="text-xs mt-1">{t("tableTree.noConnectionHint")}</p>
       </div>
     );
   }
 
   return (
     <div className="h-full flex flex-col">
-      <div className="flex items-center justify-between px-3 py-2 border-b">
-        <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground/70">
-          Schema
+      <div className="flex items-center justify-between pl-4 pr-2.5 py-1">
+        <span className="text-xs font-semibold text-muted-foreground">
+          {t("tableTree.schema")}
         </span>
-        <div className="flex gap-0.5">
-          <Button
-            variant="ghost"
-            size="icon"
-            className="h-6 w-6"
-            onClick={() => setCreateTableOpen(true)}
-            title="Create Table"
-            aria-label="Create Table"
-          >
-            <Plus className="h-3 w-3" />
-          </Button>
-          <Button
-            variant="ghost"
-            size="icon"
-            className="h-6 w-6"
-            onClick={() => setCreateViewOpen(true)}
-            title="Create View"
-            aria-label="Create View"
-          >
-            <Eye className="h-3 w-3" />
-          </Button>
-          <Button
-            variant="ghost"
-            size="icon"
-            className="h-6 w-6"
-            onClick={refresh}
-            title="Refresh"
-            aria-label="Refresh schema"
-          >
-            <RefreshCw
-              className={cn("h-3 w-3", isRefreshing && "animate-spin")}
-            />
-          </Button>
+        <div className="flex gap-0">
+          <Tip label={t("tableTree.createTable")}>
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-6 w-6"
+              onClick={() => setCreateTableOpen(true)}
+              aria-label={t("tableTree.createTable")}
+            >
+              <Plus className="h-3.5 w-3.5" />
+            </Button>
+          </Tip>
+          <Tip label={t("tableTree.createView")}>
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-6 w-6"
+              onClick={() => setCreateViewOpen(true)}
+              aria-label={t("tableTree.createView")}
+            >
+              <Eye className="h-3.5 w-3.5" />
+            </Button>
+          </Tip>
+          <Tip label={t("tableTree.refresh")}>
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-6 w-6"
+              onClick={refresh}
+              aria-label={t("tableTree.refreshSchema")}
+            >
+              <RefreshCw
+                className={cn("h-3.5 w-3.5", isRefreshing && "animate-spin")}
+              />
+            </Button>
+          </Tip>
         </div>
       </div>
 
-      <div className="px-2 py-1.5 border-b">
+      <div className="px-2 pb-1">
         <div className="relative">
-          <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground/50" />
+          <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground/60" />
           <Input
-            placeholder="Filter tables..."
+            placeholder={t("tableTree.filterPlaceholder")}
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            className="h-8 pl-8 text-sm border-0 bg-muted/40 shadow-none focus-visible:ring-1"
-            aria-label="Filter tables and views"
+            className="h-8 rounded-lg pl-8 text-xs border-0 bg-muted/40 shadow-none focus-visible:ring-1"
+            aria-label={t("tableTree.filterLabel")}
           />
         </div>
       </div>
 
       <div className="flex-1 overflow-y-auto overflow-x-hidden scrollbar-auto-hide">
         {tablesLoading || viewsLoading ? (
-          <div className="p-4 text-sm text-muted-foreground">Loading...</div>
+          <div className="p-4 text-sm text-muted-foreground">{t("tableTree.loading")}</div>
         ) : (
           <div className="py-0.5">
             {filteredTables.length > 0 && (
               <>
-                <div className="px-3 py-1.5 text-[10px] font-semibold uppercase tracking-widest text-muted-foreground/50">
-                  Tables ({filteredTables.length}
-                  {search && tables ? `/${tables.length}` : ""})
+                <div className="px-4 pt-2 pb-1 text-xs font-semibold text-muted-foreground">
+                  {t("tableTree.tables", {
+                    shown: search && tables ? `${filteredTables.length}/${tables.length}` : filteredTables.length,
+                  })}
                 </div>
                 {filteredTables.map((t) => (
                   <TableNode
@@ -657,9 +699,10 @@ export function TableTree() {
             )}
             {filteredViews.length > 0 && (
               <>
-                <div className="px-3 py-1.5 mt-1 text-[10px] font-semibold uppercase tracking-widest text-muted-foreground/50">
-                  Views ({filteredViews.length}
-                  {search && views ? `/${views.length}` : ""})
+                <div className="px-4 pt-3 pb-1 text-xs font-semibold text-muted-foreground">
+                  {t("tableTree.views", {
+                    shown: search && views ? `${filteredViews.length}/${views.length}` : filteredViews.length,
+                  })}
                 </div>
                 {filteredViews.map((v) => (
                   <TableNode key={v} name={v} type="view" onRefresh={refresh} />
@@ -668,7 +711,7 @@ export function TableTree() {
             )}
             {filteredTables.length === 0 && filteredViews.length === 0 && (
               <div className="p-4 text-sm text-muted-foreground text-center">
-                {search ? "No matches" : "No tables yet"}
+                {search ? t("tableTree.noMatches") : t("tableTree.noTables")}
               </div>
             )}
           </div>

@@ -1,7 +1,7 @@
-"use client";
 
 import { useState, useCallback, useEffect, useRef, useMemo } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useTranslation } from "react-i18next";
 import { useConnectionStore } from "@/stores/connection-store";
 import { useEditorStore } from "@/stores/editor-store";
 import { useTableForeignKeys } from "@/hooks/use-schema";
@@ -30,16 +30,17 @@ import {
   Filter,
   X,
   Trash2,
-  Download,
-  Upload,
+  FileOutput,
+  FileInput,
   Clock,
 } from "lucide-react";
 import { toast } from "sonner";
-import { cn, downloadFile, escapeCSV, errorMessage } from "@/lib/utils";
+import { cn, errorMessage, saveFile, escapeCSV, pickFile } from "@/lib/utils";
+import { locale } from "@/lib/i18n";
 import * as api from "@/lib/api-client";
+import * as native from "@/lib/native";
 import type { FilterCondition } from "@/lib/api-client";
 import type { ColumnInfo } from "@/lib/types";
-import { ConfirmDialog } from "@/components/dialogs/confirm-dialog";
 import { VectorSearchDialog } from "@/components/dialogs/vector-search-dialog";
 import { RowEditorDialog } from "./row-editor";
 
@@ -130,6 +131,7 @@ export function TableViewer({
   columns,
   initialFilter,
 }: TableViewerProps) {
+  const { t } = useTranslation("data");
   const activeId = useConnectionStore((s) => s.activeId);
   const addDataTab = useEditorStore((s) => s.addDataTab);
   const { data: foreignKeys } = useTableForeignKeys(table);
@@ -140,7 +142,7 @@ export function TableViewer({
   const [showFilters, setShowFilters] = useState(false);
   const [filterRows, setFilterRows] = useState<FilterRow[]>([]);
   const [appliedFilters, setAppliedFilters] = useState<FilterCondition[]>([]);
-  const [pendingDeleteRow, setPendingDeleteRow] = useState<number | null>(null);
+  const [deletingRow, setDeletingRow] = useState(false);
   const [importing, setImporting] = useState(false);
   const [showTimeTravel, setShowTimeTravel] = useState(false);
   const [asOfTimestamp, setAsOfTimestamp] = useState("");
@@ -182,13 +184,13 @@ export function TableViewer({
   }, []);
 
   const {
-    data,
+    data: rowsData,
     isLoading,
     error: fetchError,
-    refetch,
+    refetch: refetchRows,
   } = useQuery({
     queryKey: [
-      "tableData",
+      "tableRows",
       activeId,
       table,
       offset,
@@ -199,7 +201,7 @@ export function TableViewer({
       appliedAsOf,
     ],
     queryFn: () =>
-      api.fetchTableData(
+      api.fetchTableRows(
         activeId!,
         table,
         offset,
@@ -211,6 +213,40 @@ export function TableViewer({
       ),
     enabled: !!activeId,
   });
+
+  // Count depends only on the filter/time-travel scope, NOT on offset/limit/sort.
+  // Keeping it separate means paginating a filtered view doesn't re-run COUNT(*).
+  const { data: countData, refetch: refetchCount } = useQuery({
+    queryKey: [
+      "tableRowCount",
+      activeId,
+      table,
+      appliedFilters,
+      appliedAsOf,
+    ],
+    queryFn: () =>
+      api.fetchTableCount(
+        activeId!,
+        table,
+        appliedFilters.length > 0 ? appliedFilters : undefined,
+        appliedAsOf,
+      ),
+    enabled: !!activeId,
+  });
+
+  const data = useMemo(() => {
+    if (!rowsData) return null;
+    return {
+      columns: rowsData.columns,
+      rows: rowsData.rows,
+      totalRows: countData?.totalRows ?? 0,
+      time: rowsData.time,
+    };
+  }, [rowsData, countData]);
+
+  const refetch = useCallback(async () => {
+    await Promise.all([refetchRows(), refetchCount()]);
+  }, [refetchRows, refetchCount]);
 
   const pkColumn = columns.find((c) => c.key === "PRI");
 
@@ -229,36 +265,46 @@ export function TableViewer({
           [colName]: value === "" ? null : value,
         });
         refetch();
-        toast.success("Row updated");
+        toast.success(t("tableViewer.rowUpdated"));
       } catch (e) {
-        toast.error("Update failed", {
+        toast.error(t("tableViewer.updateFailed"), {
           description: errorMessage(e),
         });
       }
     },
-    [activeId, data, pkColumn, table, columns, refetch],
+    [activeId, data, pkColumn, table, columns, refetch, t],
   );
 
-  const handleDeleteRow = useCallback((rowIndex: number) => {
-    setPendingDeleteRow(rowIndex);
-  }, []);
+  const handleDeleteRow = useCallback(
+    async (rowIndex: number) => {
+      if (!activeId || !data || !pkColumn || deletingRow) return;
+      const pkIdx = data.columns.indexOf(pkColumn.field);
+      if (pkIdx === -1) return;
+      const pkValue = data.rows[rowIndex]?.[pkIdx];
 
-  const doDeleteRow = useCallback(async () => {
-    if (pendingDeleteRow === null || !activeId || !data || !pkColumn) return;
-    const pkIdx = data.columns.indexOf(pkColumn.field);
-    if (pkIdx === -1) return;
-    const pkValue = data.rows[pendingDeleteRow][pkIdx];
-    try {
-      await api.deleteRow(activeId, table, pkColumn.field, pkValue);
-      refetch();
-      toast.success("Row deleted");
-    } catch (e) {
-      toast.error("Delete failed", {
-        description: errorMessage(e),
+      const confirmed = await native.showConfirmDialog({
+        title: t("tableViewer.deleteRow"),
+        message: t("tableViewer.confirmDeleteRow", { column: pkColumn.field, value: pkValue }),
+        confirmLabel: t("tableViewer.delete"),
+        destructive: true,
       });
-    }
-    setPendingDeleteRow(null);
-  }, [pendingDeleteRow, activeId, data, pkColumn, table, refetch]);
+      if (!confirmed) return;
+
+      setDeletingRow(true);
+      try {
+        await api.deleteRow(activeId, table, pkColumn.field, pkValue);
+        refetch();
+        toast.success(t("tableViewer.rowDeleted"));
+      } catch (e) {
+        toast.error(t("tableViewer.deleteFailed"), {
+          description: errorMessage(e),
+        });
+      } finally {
+        setDeletingRow(false);
+      }
+    },
+    [activeId, data, pkColumn, table, refetch, deletingRow, t],
+  );
 
   const handleInsert = useCallback(
     async (row: Record<string, unknown>) => {
@@ -266,10 +312,11 @@ export function TableViewer({
       await api.insertRow(activeId, table, row);
       setOffset(0);
       refetch();
-      queryClient.invalidateQueries({ queryKey: ["tableData", activeId] });
-      toast.success("Row inserted");
+      queryClient.invalidateQueries({ queryKey: ["tableRows", activeId] });
+      queryClient.invalidateQueries({ queryKey: ["tableRowCount", activeId] });
+      toast.success(t("tableViewer.rowInserted"));
     },
-    [activeId, table, refetch, queryClient],
+    [activeId, table, refetch, queryClient, t],
   );
 
   const handleServerSort = useCallback(
@@ -377,7 +424,7 @@ export function TableViewer({
     const header = data.columns.map(escapeCSV).join(",");
     const rows = data.rows.map((r) => r.map(escapeCSV).join(","));
     const ts = new Date().toISOString().slice(0, 19).replace(/[T:]/g, "-");
-    downloadFile(
+    saveFile(
       [header, ...rows].join("\n"),
       `${table}_${ts}.csv`,
       "text/csv",
@@ -394,7 +441,7 @@ export function TableViewer({
       return obj;
     });
     const ts = new Date().toISOString().slice(0, 19).replace(/[T:]/g, "-");
-    downloadFile(
+    saveFile(
       JSON.stringify(objs, null, 2),
       `${table}_${ts}.json`,
       "application/json",
@@ -403,148 +450,75 @@ export function TableViewer({
 
   const handleExportAllCSV = async () => {
     if (!activeId) return;
-    const PAGE_SIZE = 10_000;
-    const MAX_EXPORT_ROWS = 1_000_000;
-    const exportTarget = Math.min(totalRows, MAX_EXPORT_ROWS);
+    const PAGE_SIZE = 50_000;
 
-    if (exportTarget > 10_000) {
-      const capped = totalRows > MAX_EXPORT_ROWS;
-      const ok = window.confirm(
-        `This will export ${exportTarget.toLocaleString()} rows${capped ? ` (capped at ${MAX_EXPORT_ROWS.toLocaleString()}; table has ${totalRows.toLocaleString()})` : ""}. Large exports may take a while. Continue?`,
-      );
+    if (totalRows > 10_000) {
+      const ok = await native.showConfirmDialog({
+        title: t("tableViewer.exportAllRows"),
+        message: t("tableViewer.exportAllMessage", { count: totalRows, rows: totalRows.toLocaleString(locale()) }),
+        detail: t("tableViewer.exportAllDetail"),
+        confirmLabel: t("tableViewer.exportConfirm"),
+      });
       if (!ok) return;
     }
-    try {
-      toast.info("Exporting all rows...");
-      const filters = appliedFilters.length > 0 ? appliedFilters : undefined;
-      // Stream chunks as Blob parts — each part is released after Blob creation
-      const blobParts: Blob[] = [];
-      let totalExported = 0;
 
-      for (let off = 0; off < exportTarget; off += PAGE_SIZE) {
-        const pageSize = Math.min(PAGE_SIZE, exportTarget - off);
-        const chunk = await api.fetchTableData(
-          activeId,
-          table,
-          off,
-          pageSize,
-          orderBy,
-          orderDir,
-          filters,
-          appliedAsOf,
+    const ts = new Date().toISOString().slice(0, 19).replace(/[T:]/g, "-");
+
+    try {
+      toast.info(t("tableViewer.exporting"));
+      const filters = appliedFilters.length > 0 ? appliedFilters : undefined;
+      let totalExported = 0;
+      let isFirst = true;
+      const parts: string[] = [];
+
+      for (let off = 0; off < totalRows; off += PAGE_SIZE) {
+        const chunk = await api.fetchTableRows(
+          activeId, table, off, PAGE_SIZE,
+          orderBy, orderDir, filters, appliedAsOf,
         );
-        let csv = "";
-        if (off === 0) {
-          csv = chunk.columns.map(escapeCSV).join(",") + "\n";
+        let csvChunk = "";
+        if (isFirst) {
+          csvChunk = chunk.columns.map(escapeCSV).join(",") + "\n";
         }
         if (chunk.rows.length > 0) {
-          csv += chunk.rows.map((r) => r.map(escapeCSV).join(",")).join("\n") + "\n";
+          csvChunk += chunk.rows.map((r) => r.map(escapeCSV).join(",")).join("\n") + "\n";
           totalExported += chunk.rows.length;
         }
-        // Convert string to Blob immediately so the string can be GC'd
-        if (csv) blobParts.push(new Blob([csv]));
-        if (chunk.rows.length < pageSize) break;
+        parts.push(csvChunk);
+        isFirst = false;
+        if (chunk.rows.length < PAGE_SIZE) break;
       }
-
-      const blob = new Blob(blobParts, { type: "text/csv" });
-      blobParts.length = 0; // release references
-      const url = URL.createObjectURL(blob);
-      const ts = new Date().toISOString().slice(0, 19).replace(/[T:]/g, "-");
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = `${table}_all_${ts}.csv`;
-      a.click();
-      setTimeout(() => URL.revokeObjectURL(url), 1000);
-      const capNote =
-        totalRows > MAX_EXPORT_ROWS
-          ? ` (of ${totalRows.toLocaleString()}, capped)`
-          : "";
-      toast.success(`Exported ${totalExported.toLocaleString()} rows${capNote}`);
+      saveFile(parts.join(""), `${table}_${ts}.csv`, "text/csv");
+      const msg = t("tableViewer.exported", { count: totalExported, rows: totalExported.toLocaleString(locale()) });
+      native.notify(t("tableViewer.exportComplete"), msg);
+      toast.success(msg);
     } catch (e) {
-      toast.error("Export failed", {
+      toast.error(t("tableViewer.exportFailed"), {
         description: errorMessage(e),
       });
     }
   };
 
-  const handleImportCSV = () => {
-    csvInputRef.current?.click();
-  };
+  const handleImport = async () => {
+    if (!activeId) return;
+    const selected = await pickFile(".csv,.json,.jsonl,text/csv,application/json");
+    if (!selected) return;
 
-  const handleCSVFileSelected = async (
-    e: React.ChangeEvent<HTMLInputElement>,
-  ) => {
-    const file = e.target.files?.[0];
-    if (!file || !activeId) return;
-    // Reset so same file can be re-selected
-    e.target.value = "";
+    const ext = selected.name.split(".").pop()?.toLowerCase() ?? "";
+    const format = ext === "json" || ext === "jsonl" ? "json" : "csv";
+
     setImporting(true);
     try {
-      const text = await file.text();
-      const lines = text
-        .replace(/\r\n/g, "\n")
-        .replace(/\r/g, "\n")
-        .split("\n")
-        .filter((l) => l.trim());
-      if (lines.length < 2) {
-        toast.error(
-          "CSV file must have a header row and at least one data row",
-        );
-        return;
-      }
-      const csvHeaders = parseCSVLine(lines[0]);
-      const rows: Record<string, unknown>[] = [];
-      let skipped = 0;
-      for (let i = 1; i < lines.length; i++) {
-        const values = parseCSVLine(lines[i]);
-        if (values.length !== csvHeaders.length) {
-          skipped++;
-          continue;
-        }
-        const row: Record<string, unknown> = {};
-        for (let j = 0; j < csvHeaders.length; j++) {
-          const v = values[j];
-          if (v === "" || v === "NULL") continue;
-          row[csvHeaders[j]] = v;
-        }
-        if (Object.keys(row).length > 0) {
-          rows.push(row);
-        } else {
-          skipped++;
-        }
-      }
-      // Batch insert in chunks of 500
-      let imported = 0;
-      const totalChunks = Math.ceil(rows.length / 500);
-      for (let i = 0; i < rows.length; i += 500) {
-        const chunk = rows.slice(i, i + 500);
-        try {
-          const result = await api.insertRows(activeId, table, chunk);
-          imported += result.changes;
-        } catch (chunkErr) {
-          const chunkIndex = Math.floor(i / 500) + 1;
-          refetch();
-          queryClient.invalidateQueries({ queryKey: ["tableData", activeId] });
-          queryClient.invalidateQueries({ queryKey: ["rowcount", activeId] });
-          toast.error(`Import failed at batch ${chunkIndex}/${totalChunks}`, {
-            description: `${imported} row${imported !== 1 ? "s" : ""} imported before failure. ${errorMessage(chunkErr)}`,
-          });
-          return;
-        }
-      }
+      const result = await api.importFile(activeId, table, selected, format, true);
       refetch();
-      queryClient.invalidateQueries({ queryKey: ["tableData", activeId] });
+      queryClient.invalidateQueries({ queryKey: ["tableRows", activeId] });
+      queryClient.invalidateQueries({ queryKey: ["tableRowCount", activeId] });
       queryClient.invalidateQueries({ queryKey: ["rowcount", activeId] });
-      const msg = `Imported ${imported} row${imported !== 1 ? "s" : ""}`;
-      if (skipped > 0) {
-        toast.success(msg, {
-          description: `${skipped} row${skipped !== 1 ? "s" : ""} skipped (column mismatch or empty)`,
-        });
-      } else {
-        toast.success(msg);
-      }
+      const msg = t("tableViewer.imported", { count: result.rows, time: result.time });
+      native.notify(t("tableViewer.importComplete"), msg);
+      toast.success(msg);
     } catch (e) {
-      toast.error("Import failed", {
+      toast.error(t("tableViewer.importFailed"), {
         description: errorMessage(e),
       });
     } finally {
@@ -581,9 +555,9 @@ export function TableViewer({
           )}
         >
           <Filter className="h-3.5 w-3.5" />
-          Filter
+          {t("tableViewer.filter")}
           {appliedFilters.length > 0 && (
-            <span className="ml-0.5 text-[10px] bg-primary/20 text-primary rounded-full px-1.5">
+            <span className="ml-0.5 text-xs bg-primary/20 text-primary rounded-full px-1.5">
               {appliedFilters.length}
             </span>
           )}
@@ -603,10 +577,10 @@ export function TableViewer({
           )}
         >
           <Clock className="h-3.5 w-3.5" />
-          Time Travel
+          {t("tableViewer.timeTravel")}
           {appliedAsOf && (
-            <span className="ml-0.5 text-[10px] bg-amber-500/20 text-amber-600 dark:text-amber-400 rounded-full px-1.5">
-              ON
+            <span className="ml-0.5 text-xs bg-amber-500/20 text-amber-600 dark:text-amber-400 rounded-full px-1.5">
+              {t("tableViewer.on")}
             </span>
           )}
         </Button>
@@ -618,39 +592,39 @@ export function TableViewer({
           className="gap-1"
         >
           <Plus className="h-3.5 w-3.5" />
-          Insert
+          {t("tableViewer.insert")}
         </Button>
         <Button
           variant="ghost"
           size="sm"
-          onClick={handleImportCSV}
+          onClick={handleImport}
           disabled={importing}
           className="gap-1"
         >
           {importing ? (
             <RefreshCw className="h-3.5 w-3.5 animate-spin" />
           ) : (
-            <Upload className="h-3.5 w-3.5" />
+            <FileInput className="h-3.5 w-3.5" />
           )}
-          {importing ? "Importing..." : "Import"}
+          {importing ? t("tableViewer.importing") : t("tableViewer.import")}
         </Button>
         {data && data.rows.length > 0 && (
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <Button variant="ghost" size="sm" className="gap-1">
-                <Download className="h-3.5 w-3.5" />
-                Export
+                <FileOutput className="h-3.5 w-3.5" />
+                {t("tableViewer.export")}
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent>
               <DropdownMenuItem onClick={handleExportCSV}>
-                Export Page as CSV
+                {t("tableViewer.exportPageCsv")}
               </DropdownMenuItem>
               <DropdownMenuItem onClick={handleExportJSON}>
-                Export Page as JSON
+                {t("tableViewer.exportPageJson")}
               </DropdownMenuItem>
               <DropdownMenuItem onClick={handleExportAllCSV}>
-                Export All as CSV
+                {t("tableViewer.exportAllCsv")}
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
@@ -659,8 +633,8 @@ export function TableViewer({
           variant="ghost"
           size="icon"
           className="h-7 w-7"
-          onClick={async () => { await refetch(); toast.success("Data refreshed"); }}
-          aria-label="Refresh data"
+          onClick={() => refetch()}
+          aria-label={t("tableViewer.refreshData")}
         >
           <RefreshCw className="h-3.5 w-3.5" />
         </Button>
@@ -722,7 +696,7 @@ export function TableViewer({
                   <SelectContent>
                     {ops.map((op) => (
                       <SelectItem key={op.value} value={op.value}>
-                        {op.label}
+                        {isVec ? t(`tableViewer.vectorOperators.${op.value}`) : op.label}
                       </SelectItem>
                     ))}
                   </SelectContent>
@@ -756,7 +730,7 @@ export function TableViewer({
                       type="number"
                       step="0.01"
                       min="0"
-                      placeholder="max dist"
+                      placeholder={t("tableViewer.maxDistPlaceholder")}
                       value={
                         f.value.includes("|")
                           ? f.value.substring(f.value.lastIndexOf("|") + 1)
@@ -782,10 +756,10 @@ export function TableViewer({
                   <Input
                     placeholder={
                       f.operator === "like"
-                        ? "%pattern%"
+                        ? t("tableViewer.likePlaceholder")
                         : f.operator === "in"
-                          ? "val1|val2|val3"
-                          : "value"
+                          ? t("tableViewer.inPlaceholder")
+                          : t("tableViewer.valuePlaceholder")
                     }
                     value={f.value}
                     onChange={(e) =>
@@ -806,7 +780,7 @@ export function TableViewer({
                   size="icon"
                   className="h-7 w-7 shrink-0 text-muted-foreground hover:text-destructive"
                   onClick={() => removeFilter(f.id)}
-                  aria-label="Remove filter"
+                  aria-label={t("tableViewer.removeFilter")}
                 >
                   <X className="h-3.5 w-3.5" />
                 </Button>
@@ -822,7 +796,7 @@ export function TableViewer({
               className="gap-1 h-7 text-xs"
             >
               <Plus className="h-3 w-3" />
-              Add Condition
+              {t("tableViewer.addCondition")}
             </Button>
             <div className="flex-1" />
             {(filterRows.length > 0 || appliedFilters.length > 0) && (
@@ -833,7 +807,7 @@ export function TableViewer({
                 className="gap-1 h-7 text-xs text-muted-foreground"
               >
                 <Trash2 className="h-3 w-3" />
-                Clear All
+                {t("tableViewer.clearAll")}
               </Button>
             )}
             <Button
@@ -846,7 +820,7 @@ export function TableViewer({
               )}
             >
               <Filter className="h-3 w-3" />
-              Apply
+              {t("tableViewer.apply")}
             </Button>
           </div>
         </div>
@@ -882,7 +856,7 @@ export function TableViewer({
                 setOffset(0);
               }}
             >
-              Apply
+              {t("tableViewer.apply")}
             </Button>
             {appliedAsOf && (
               <Button
@@ -896,12 +870,12 @@ export function TableViewer({
                 }}
               >
                 <X className="h-3 w-3" />
-                Clear
+                {t("tableViewer.clear")}
               </Button>
             )}
             <div className="flex-1" />
-            <span className="text-[11px] text-muted-foreground">
-              View table data at a specific point in time
+            <span className="text-xs text-muted-foreground">
+              {t("tableViewer.timeTravelHint")}
             </span>
           </div>
         </div>
@@ -910,11 +884,10 @@ export function TableViewer({
       {/* Grid */}
       <div className="flex-1 overflow-hidden">
         {isLoading ? (
-          <div className="p-3 text-xs text-muted-foreground">Loading...</div>
+          <div className="p-3 text-xs text-muted-foreground">{t("tableViewer.loading")}</div>
         ) : fetchError ? (
           <div className="p-3 text-xs text-destructive">
-            Failed to load data:{" "}
-            {errorMessage(fetchError)}
+            {t("tableViewer.loadFailed", { error: errorMessage(fetchError) })}
           </div>
         ) : data ? (
           <DataGrid
@@ -944,14 +917,14 @@ export function TableViewer({
           className="h-6 w-6"
           disabled={offset === 0}
           onClick={() => setOffset(Math.max(0, offset - limit))}
-          aria-label="Previous page"
+          aria-label={t("tableViewer.previousPage")}
         >
           <ChevronLeft className="h-3.5 w-3.5" />
         </Button>
         <span className="text-muted-foreground tabular-nums">
           {data && data.rows.length > 0
-            ? `Rows ${offset + 1}-${offset + data.rows.length} of ${totalRows}`
-            : "No rows"}
+            ? t("tableViewer.rowRange", { from: offset + 1, to: offset + data.rows.length, total: totalRows })
+            : t("tableViewer.noRows")}
         </span>
         <Button
           variant="ghost"
@@ -959,7 +932,7 @@ export function TableViewer({
           className="h-6 w-6"
           disabled={!data || offset + limit >= totalRows}
           onClick={() => setOffset(offset + limit)}
-          aria-label="Next page"
+          aria-label={t("tableViewer.nextPage")}
         >
           <ChevronRight className="h-3.5 w-3.5" />
         </Button>
@@ -971,38 +944,30 @@ export function TableViewer({
             setOffset(0);
           }}
         >
-          <SelectTrigger className="h-6 w-20 text-xs border-0 bg-transparent shadow-none">
+          <SelectTrigger className="h-6 w-auto gap-1 text-xs border-0 bg-transparent shadow-none">
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
             {[25, 50, 100, 250, 500].map((n) => (
               <SelectItem key={n} value={String(n)}>
-                {n} rows
+                {t("tableViewer.pageSize", { count: n })}
               </SelectItem>
             ))}
           </SelectContent>
         </Select>
         {appliedFilters.length > 0 && (
-          <span className="ml-2 text-primary text-[11px]">
-            {appliedFilters.length} filter
-            {appliedFilters.length !== 1 ? "s" : ""} active
+          <span className="ml-2 text-primary text-xs">
+            {t("tableViewer.filtersActive", { count: appliedFilters.length })}
           </span>
         )}
         {appliedAsOf && (
-          <span className="ml-2 text-amber-500 text-[11px] flex items-center gap-1">
+          <span className="ml-2 text-amber-500 text-xs flex items-center gap-1">
             <Clock className="h-3 w-3" />
-            AS OF {new Date(appliedAsOf).toLocaleString()}
+            AS OF {new Date(appliedAsOf).toLocaleString(locale())}
           </span>
         )}
       </div>
 
-      <input
-        ref={csvInputRef}
-        type="file"
-        accept=".csv"
-        className="hidden"
-        onChange={handleCSVFileSelected}
-      />
 
       <RowEditorDialog
         open={insertOpen}
@@ -1010,21 +975,6 @@ export function TableViewer({
         columns={columns}
         onSave={handleInsert}
       />
-
-      {pendingDeleteRow !== null &&
-        data &&
-        pkColumn &&
-        pendingDeleteRow < data.rows.length && (
-          <ConfirmDialog
-            open
-            onOpenChange={() => setPendingDeleteRow(null)}
-            title="Delete Row"
-            description={`Delete row with ${pkColumn.field} = ${data.rows[pendingDeleteRow]?.[data.columns.indexOf(pkColumn.field)]}?`}
-            confirmLabel="Delete"
-            destructive
-            onConfirm={doDeleteRow}
-          />
-        )}
 
       <VectorSearchDialog
         open={vecSearchOpen}

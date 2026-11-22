@@ -4,37 +4,33 @@ import type {
   ExecResult,
   DdlResult,
   ErrorResult,
+  ScriptResult,
   ColumnInfo,
   IndexInfo,
   ForeignKeyInfo,
   FilterCondition,
 } from "./types";
+import i18n from "./i18n";
 
-const TIMEOUT_MS = 30_000;
-
-const headers = (connId?: string) => {
-  const h: Record<string, string> = { "Content-Type": "application/json" };
-  if (connId) h["X-Connection-Id"] = connId;
-  return h;
-};
-
-function withTimeout(ms = TIMEOUT_MS): AbortSignal {
-  return AbortSignal.timeout(ms);
-}
-
-async function json<T>(res: Response): Promise<T> {
-  let data: unknown;
+/**
+ * Run a server command (server/commands.ts) by the name and arguments of
+ * Stoolap Desktop's Tauri command. A failure rejects with the error's text,
+ * as Tauri's invoke does.
+ */
+export async function rpc<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
+  let res: Response;
   try {
-    data = await res.json();
-  } catch {
-    throw new Error(`Request failed with status ${res.status}`);
+    res = await fetch("/api/rpc", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ cmd, args }),
+    });
+  } catch (e) {
+    throw e instanceof Error ? e.message : String(e);
   }
-  if (!res.ok)
-    throw new Error(
-      (data as { error?: string }).error ||
-        `Request failed with status ${res.status}`,
-    );
-  return data as T;
+  const body = await res.json().catch(() => null);
+  if (!res.ok) throw (body && typeof body.error === "string" ? body.error : res.statusText);
+  return body as T;
 }
 
 // Connections
@@ -42,104 +38,74 @@ export async function openConnection(
   path: string,
   name?: string,
 ): Promise<ConnectionMeta> {
-  const res = await fetch("/api/connections", {
-    method: "POST",
-    headers: headers(),
-    body: JSON.stringify({ path, name }),
-    signal: withTimeout(),
-  });
-  return json<ConnectionMeta>(res);
+  return rpc("db_open", { path, name });
 }
 
 export async function listConnections(): Promise<ConnectionMeta[]> {
-  const res = await fetch("/api/connections", {
-    cache: "no-store",
-    signal: withTimeout(),
-  });
-  return json<ConnectionMeta[]>(res);
+  return rpc("db_list");
 }
 
 export async function closeConnection(id: string): Promise<void> {
-  const res = await fetch(`/api/connections/${id}`, {
-    method: "DELETE",
-    signal: withTimeout(),
-  });
-  if (!res.ok) {
-    let msg = `Failed to close connection (${res.status})`;
-    try {
-      const data = await res.json();
-      if (data.error) msg = data.error;
-    } catch {
-      /* non-JSON response */
-    }
-    throw new Error(msg);
-  }
+  await rpc("db_close", { connId: id });
 }
 
-// Query
-function combineSignals(
-  signal: AbortSignal,
-  timeoutMs: number,
-): { signal: AbortSignal; cleanup: () => void } {
-  const timeout = AbortSignal.timeout(timeoutMs);
-  if (typeof AbortSignal.any === "function") {
-    return { signal: AbortSignal.any([signal, timeout]), cleanup: () => {} };
-  }
-  // Fallback for older runtimes
-  const controller = new AbortController();
-  const cleanup = () => {
-    signal.removeEventListener("abort", onAbort);
-    timeout.removeEventListener("abort", onAbort);
-  };
-  const onAbort = () => {
-    controller.abort();
-    cleanup();
-  };
-  if (signal.aborted || timeout.aborted) {
-    controller.abort();
-    return { signal: controller.signal, cleanup };
-  }
-  signal.addEventListener("abort", onAbort, { once: true });
-  timeout.addEventListener("abort", onAbort, { once: true });
-  return { signal: controller.signal, cleanup };
-}
-
+/**
+ * Execute a query. If `signal` is provided, rejecting the AbortSignal
+ * returns early with a "cancelled" error result — the command itself
+ * keeps running on the server (stoolap has no external cancellation hook),
+ * but the UI frees up immediately and the stale result is discarded.
+ */
 export async function executeQuery(
   connId: string,
   sql: string,
   signal?: AbortSignal,
-): Promise<QueryResult | ExecResult | DdlResult | ErrorResult> {
-  const combined = signal
-    ? combineSignals(signal, 60_000)
-    : { signal: withTimeout(60_000), cleanup: () => {} };
-  try {
-    const res = await fetch("/api/query", {
-      method: "POST",
-      headers: headers(connId),
-      body: JSON.stringify({ sql }),
-      signal: combined.signal,
-    });
-    return json<QueryResult | ExecResult | DdlResult | ErrorResult>(res);
-  } finally {
-    combined.cleanup();
-  }
+): Promise<QueryResult | ExecResult | DdlResult | ScriptResult | ErrorResult> {
+  // Wrap the invoke promise to swallow its rejection into a resolved
+  // ErrorResult. Without this, if the user cancels and the backend later
+  // rejects, the rejection lands unhandled because Promise.race already
+  // resolved via the abort path.
+  const invokePromise: Promise<QueryResult | ExecResult | DdlResult | ScriptResult | ErrorResult> =
+    rpc<QueryResult | ExecResult | DdlResult | ScriptResult>("db_execute_query", {
+      connId,
+      sql,
+    }).catch((e) => ({
+      error: e instanceof Error ? e.message : String(e),
+    }));
+
+  if (!signal) return invokePromise;
+  if (signal.aborted) return { error: i18n.t("common:errors.queryCancelled") };
+
+  const abortPromise = new Promise<ErrorResult>((resolve) => {
+    signal.addEventListener(
+      "abort",
+      () => resolve({ error: i18n.t("common:errors.queryCancelled") }),
+      { once: true },
+    );
+  });
+  return Promise.race([invokePromise, abortPromise]);
+}
+
+/**
+ * Run SQL and throw when it fails. executeQuery reports a failure as an
+ * `{ error }` result instead of throwing, so a try/catch around it never
+ * sees one; use this where the caller handles errors with catch.
+ */
+export async function runSql(
+  connId: string,
+  sql: string,
+): Promise<QueryResult | ExecResult | DdlResult | ScriptResult> {
+  const result = await executeQuery(connId, sql);
+  if ("error" in result && result.error) throw new Error(result.error);
+  return result as QueryResult | ExecResult | DdlResult | ScriptResult;
 }
 
 // Schema
 export async function fetchTables(connId: string): Promise<string[]> {
-  const res = await fetch("/api/schema/tables", {
-    headers: headers(connId),
-    signal: withTimeout(),
-  });
-  return json<string[]>(res);
+  return rpc("db_tables", { connId });
 }
 
 export async function fetchViews(connId: string): Promise<string[]> {
-  const res = await fetch("/api/schema/views", {
-    headers: headers(connId),
-    signal: withTimeout(),
-  });
-  return json<string[]>(res);
+  return rpc("db_views", { connId });
 }
 
 export async function describeTable(
@@ -147,33 +113,21 @@ export async function describeTable(
   table: string,
   type: "table" | "view" = "table",
 ): Promise<ColumnInfo[]> {
-  const res = await fetch(
-    `/api/schema/describe?table=${encodeURIComponent(table)}&type=${type}`,
-    { headers: headers(connId), signal: withTimeout() },
-  );
-  return json<ColumnInfo[]>(res);
+  return rpc("db_describe", { connId, table, schemaType: type });
 }
 
 export async function fetchIndexes(
   connId: string,
   table: string,
 ): Promise<IndexInfo[]> {
-  const res = await fetch(
-    `/api/schema/indexes?table=${encodeURIComponent(table)}`,
-    { headers: headers(connId), signal: withTimeout() },
-  );
-  return json<IndexInfo[]>(res);
+  return rpc("db_indexes", { connId, table });
 }
 
 export async function fetchForeignKeys(
   connId: string,
   table: string,
 ): Promise<ForeignKeyInfo[]> {
-  const res = await fetch(
-    `/api/schema/fks?table=${encodeURIComponent(table)}`,
-    { headers: headers(connId), signal: withTimeout() },
-  );
-  return json<ForeignKeyInfo[]>(res);
+  return rpc("db_fks", { connId, table });
 }
 
 export async function fetchDDL(
@@ -181,25 +135,34 @@ export async function fetchDDL(
   name: string,
   type: "table" | "view" = "table",
 ): Promise<string> {
-  const res = await fetch(
-    `/api/schema/ddl?${type}=${encodeURIComponent(name)}`,
-    { headers: headers(connId), signal: withTimeout() },
-  );
-  const data = await json<{ ddl: string }>(res);
-  return data.ddl;
+  return rpc("db_ddl", { connId, name, schemaType: type });
 }
 
 // Data
 export type { FilterCondition };
 
-export interface TableDataResult {
+export interface TableRowsResult {
   columns: string[];
   rows: unknown[][];
+  time: number;
+}
+
+export interface TableCountResult {
   totalRows: number;
   time: number;
 }
 
-export async function fetchTableData(
+/** One page of a table's rows as INSERT statements (a line each), for a SQL backup. */
+export async function fetchTableInserts(
+  connId: string,
+  table: string,
+  offset: number,
+  limit: number,
+): Promise<{ sql: string; rows: number }> {
+  return rpc("db_table_inserts", { connId, table, offset, limit });
+}
+
+export async function fetchTableRows(
   connId: string,
   table: string,
   offset = 0,
@@ -208,23 +171,26 @@ export async function fetchTableData(
   orderDir?: "ASC" | "DESC",
   filters?: FilterCondition[],
   asOf?: string,
-): Promise<TableDataResult> {
-  const params = new URLSearchParams({
+): Promise<TableRowsResult> {
+  return rpc("db_table_rows", {
+    connId,
     table,
-    offset: String(offset),
-    limit: String(limit),
+    offset,
+    limit,
+    orderBy,
+    orderDir,
+    filters,
+    asOf,
   });
-  if (orderBy) params.set("orderBy", orderBy);
-  if (orderDir) params.set("orderDir", orderDir);
-  if (filters && filters.length > 0) {
-    params.set("filters", JSON.stringify(filters));
-  }
-  if (asOf) params.set("asOf", asOf);
-  const res = await fetch(`/api/data?${params}`, {
-    headers: headers(connId),
-    signal: withTimeout(),
-  });
-  return json<TableDataResult>(res);
+}
+
+export async function fetchTableCount(
+  connId: string,
+  table: string,
+  filters?: FilterCondition[],
+  asOf?: string,
+): Promise<TableCountResult> {
+  return rpc("db_table_count", { connId, table, filters, asOf });
 }
 
 export async function insertRow(
@@ -232,13 +198,7 @@ export async function insertRow(
   table: string,
   row: Record<string, unknown>,
 ): Promise<ExecResult> {
-  const res = await fetch("/api/data", {
-    method: "POST",
-    headers: headers(connId),
-    body: JSON.stringify({ table, row }),
-    signal: withTimeout(),
-  });
-  return json<ExecResult>(res);
+  return rpc("db_insert_row", { connId, table, row });
 }
 
 export async function insertRows(
@@ -246,13 +206,7 @@ export async function insertRows(
   table: string,
   rows: Record<string, unknown>[],
 ): Promise<ExecResult> {
-  const res = await fetch("/api/data", {
-    method: "POST",
-    headers: headers(connId),
-    body: JSON.stringify({ table, rows }),
-    signal: withTimeout(120_000),
-  });
-  return json<ExecResult>(res);
+  return rpc("db_insert_rows", { connId, table, rows });
 }
 
 export async function updateRow(
@@ -262,13 +216,27 @@ export async function updateRow(
   pkValue: unknown,
   updates: Record<string, unknown>,
 ): Promise<ExecResult> {
-  const res = await fetch("/api/data/row", {
-    method: "PUT",
-    headers: headers(connId),
-    body: JSON.stringify({ table, pkColumn, pkValue, updates }),
-    signal: withTimeout(),
-  });
-  return json<ExecResult>(res);
+  return rpc("db_update_row", { connId, table, pkColumn, pkValue, updates });
+}
+
+/** Import a CSV or JSON file into a table with COPY (app/api/import) */
+export async function importFile(
+  connId: string,
+  table: string,
+  file: File,
+  format: "csv" | "json",
+  hasHeader: boolean,
+): Promise<{ rows: number; time: number }> {
+  const form = new FormData();
+  form.set("connId", connId);
+  form.set("table", table);
+  form.set("format", format);
+  form.set("header", String(hasHeader));
+  form.set("file", file);
+  const res = await fetch("/api/import", { method: "POST", body: form });
+  const body = await res.json().catch(() => null);
+  if (!res.ok) throw (body && typeof body.error === "string" ? body.error : res.statusText);
+  return body;
 }
 
 export async function deleteRow(
@@ -277,11 +245,15 @@ export async function deleteRow(
   pkColumn: string,
   pkValue: unknown,
 ): Promise<ExecResult> {
-  const res = await fetch("/api/data/row", {
-    method: "DELETE",
-    headers: headers(connId),
-    body: JSON.stringify({ table, pkColumn, pkValue }),
-    signal: withTimeout(),
-  });
-  return json<ExecResult>(res);
+  return rpc("db_delete_row", { connId, table, pkColumn, pkValue });
+}
+
+/** Statements running longer than `ms` are cancelled by the engine; 0 turns it off. */
+/** Whether the connection's session is inside a transaction the user began */
+export async function transactionOpen(connId: string): Promise<boolean> {
+  return rpc("db_transaction_open", { connId });
+}
+
+export async function setQueryTimeout(ms: number): Promise<void> {
+  await rpc("db_set_query_timeout", { ms });
 }

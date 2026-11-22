@@ -1,0 +1,58 @@
+[
+  {
+    "why": "a backslash escapes the quote, so the DELETE is outside the string",
+    "sql": "SELECT 'x\\'' ; DELETE FROM t --'",
+    "statements": [
+      "SELECT 'x\\''",
+      "DELETE FROM t --'"
+    ]
+  },
+  {
+    "why": "# starts a comment, so its quote opens no string",
+    "sql": "SELECT 1 # '\n; DELETE FROM t",
+    "statements": [
+      "SELECT 1 # '",
+      "DELETE FROM t"
+    ]
+  },
+  {
+    "why": "a backtick quotes a name, so its quote opens no string",
+    "sql": "SELECT `x'` ; DELETE FROM t",
+    "statements": [
+      "SELECT `x'`",
+      "DELETE FROM t"
+    ]
+  },
+  {
+    "why": "an escaped backslash ends the string",
+    "sql": "SELECT 'a\\\\'; SELECT 1",
+    "statements": [
+      "SELECT 'a\\\\'",
+      "SELECT 1"
+    ]
+  },
+  {
+    "why": "a backslash escapes nothing in a double-quoted name",
+    "sql": "SELECT \"a\\\"; SELECT 1",
+    "statements": [
+      "SELECT \"a\\\"",
+      "SELECT 1"
+    ]
+  },
+  {
+    "why": "doubled quotes and semicolons inside strings and names",
+    "sql": "SELECT 'a;b''c' ; SELECT \"d;\"\"e\"",
+    "statements": [
+      "SELECT 'a;b''c'",
+      "SELECT \"d;\"\"e\""
+    ]
+  },
+  {
+    "why": "semicolons inside comments",
+    "sql": "SELECT /* ; */ 1; SELECT 2 -- ;\n",
+    "statements": [
+      "SELECT /* ; */ 1",
+      "SELECT 2 -- ;"
+    ]
+  }
+]

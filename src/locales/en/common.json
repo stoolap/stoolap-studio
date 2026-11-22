@@ -1,0 +1,26 @@
+{
+  "errorBoundary": {
+    "title": "Something went wrong",
+    "unexpected": "An unexpected error occurred.",
+    "tryAgain": "Try Again"
+  },
+  "errors": {
+    "unknown": "Unknown error",
+    "queryCancelled": "Query cancelled",
+    "restoreCancelled": "Restore cancelled by user"
+  },
+  "fileTypes": {
+    "ext": "{{ext}} Files",
+    "sql": "SQL Files",
+    "all": "All Files"
+  },
+  "save": {
+    "saved": "Saved {{name}}",
+    "failed": "Could not save {{name}}"
+  },
+  "native": {
+    "openDatabase": "Open Stoolap Database",
+    "ok": "OK",
+    "cancel": "Cancel"
+  }
+}

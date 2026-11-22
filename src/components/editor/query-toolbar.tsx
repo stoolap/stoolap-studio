@@ -1,6 +1,7 @@
-"use client";
 
 import { useState, useEffect, useRef } from "react";
+import { useTranslation } from "react-i18next";
+import i18n from "@/lib/i18n";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -17,11 +18,11 @@ import {
   Play,
   FileSearch,
   Loader2,
-  Download,
+  FileOutput,
   History,
   AlignLeft,
   Square,
-  Upload,
+  FolderOpen,
   Save,
   Bookmark,
   BookmarkCheck,
@@ -33,20 +34,27 @@ import { useBookmarkStore } from "@/stores/bookmark-store";
 import type { ApiResult, QueryResult } from "@/lib/types";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { formatSQL } from "@/lib/sql-formatter";
-import { downloadFile, escapeCSV } from "@/lib/utils";
+import { saveFile, escapeCSV, errorMessage, pickFile } from "@/lib/utils";
+import { toast } from "sonner";
 import { useModKey } from "@/hooks/use-mod-key";
+import { explainAll } from "@/lib/sql-utils";
+import { getEditorSelection } from "@/lib/editor-registry";
 
-function resultStats(result: ApiResult | null) {
+/** How long the user waited (for a script, the whole script's wait, not the
+ * statement's engine time) and what changed. A result's row count is under
+ * its grid, which also counts the rows a search leaves. */
+function resultStats(result: ApiResult | null, waited?: number) {
   if (!result) return null;
+  if ("time" in result && waited !== undefined) result = { ...result, time: waited };
   if ("error" in result && result.error) return null;
   if ("columns" in result) {
-    return `${result.rows.length} row${result.rows.length !== 1 ? "s" : ""} | ${result.time}ms`;
+    return `${result.time}ms`;
   }
   if ("ddl" in result) {
     return `${result.ddl} | ${result.time}ms`;
   }
   if ("changes" in result) {
-    return `${result.changes} affected | ${result.time}ms`;
+    return i18n.t("editor:toolbar.statsChanges", { count: result.changes, time: result.time });
   }
   return null;
 }
@@ -55,7 +63,7 @@ function exportCSV(result: QueryResult, name: string) {
   const header = result.columns.map(escapeCSV).join(",");
   const rows = result.rows.map((r) => r.map(escapeCSV).join(","));
   const ts = new Date().toISOString().slice(0, 19).replace(/[T:]/g, "-");
-  downloadFile([header, ...rows].join("\n"), `${name}_${ts}.csv`, "text/csv");
+  saveFile([header, ...rows].join("\n"), `${name}_${ts}.csv`, "text/csv");
 }
 
 function exportJSON(result: QueryResult, name: string) {
@@ -67,7 +75,7 @@ function exportJSON(result: QueryResult, name: string) {
     return obj;
   });
   const ts = new Date().toISOString().slice(0, 19).replace(/[T:]/g, "-");
-  downloadFile(
+  saveFile(
     JSON.stringify(objs, null, 2),
     `${name}_${ts}.json`,
     "application/json",
@@ -75,7 +83,9 @@ function exportJSON(result: QueryResult, name: string) {
 }
 
 export function QueryToolbar() {
+  const { t } = useTranslation("editor");
   const { executeQuery, cancelQuery, isConnected } = useQueryExecution();
+
   const activeTab = useEditorStore(
     (s) => s.tabs.find((t) => t.id === s.activeTabId) ?? null,
   );
@@ -83,27 +93,23 @@ export function QueryToolbar() {
   const addTab = useEditorStore((s) => s.addTab);
   const setActiveTab = useEditorStore((s) => s.setActiveTab);
   const queryHistory = useEditorStore((s) => s.queryHistory);
-  const fileInputRef = useRef<HTMLInputElement | null>(null);
   const { bookmarks, addBookmark, removeBookmark } = useBookmarkStore();
   const mod = useModKey();
   const [showSaveInput, setShowSaveInput] = useState(false);
   const [bookmarkName, setBookmarkName] = useState("");
   const saveInputRef = useRef<HTMLInputElement | null>(null);
 
+  // Like Mod+Enter, the buttons run only the selected text when there is one
+  const sqlToRun = () => getEditorSelection().trim() || activeTab?.sql.trim() || "";
+
   const handleRun = () => {
-    if (activeTab && activeTab.sql.trim()) {
-      executeQuery(activeTab.id, activeTab.sql);
-    }
+    const sql = sqlToRun();
+    if (activeTab && sql) executeQuery(activeTab.id, sql);
   };
 
   const handleExplain = () => {
-    if (activeTab && activeTab.sql.trim()) {
-      const sql = activeTab.sql.trimStart();
-      const query = sql.toUpperCase().startsWith("EXPLAIN")
-        ? sql
-        : `EXPLAIN ${sql}`;
-      executeQuery(activeTab.id, query);
-    }
+    const sql = sqlToRun();
+    if (activeTab && sql) executeQuery(activeTab.id, explainAll(sql));
   };
 
   const handleFormat = () => {
@@ -117,23 +123,16 @@ export function QueryToolbar() {
     if (activeTab) cancelQuery(activeTab.id);
   };
 
-  const handleOpenFile = () => {
-    fileInputRef.current?.click();
-  };
-
-  const handleFileSelected = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
+  const handleOpenFile = async () => {
+    const file = await pickFile(".sql,.txt,text/plain");
     if (!file) return;
-    const reader = new FileReader();
-    reader.onload = () => {
-      const sql = reader.result as string;
-      const tabName = file.name.replace(/\.sql$/i, "");
-      const tabId = addTab(tabName, sql);
-      setActiveTab(tabId);
-    };
-    reader.readAsText(file);
-    // Reset so same file can be re-selected
-    e.target.value = "";
+    try {
+      const sql = await file.text();
+      const tabName = file.name.replace(/\.sql$/i, "") || t("tabs.defaultTitle");
+      setActiveTab(addTab(tabName, sql));
+    } catch (e) {
+      toast.error(t("toolbar.openFailed", { name: file.name }), { description: errorMessage(e) });
+    }
   };
 
   const handleSaveBookmark = () => {
@@ -179,7 +178,7 @@ export function QueryToolbar() {
     };
   }, [isRunning]);
 
-  const stats = activeTab ? resultStats(activeTab.result) : null;
+  const stats = activeTab ? resultStats(activeTab.result, activeTab.resultsTime) : null;
   const hasQueryResult =
     activeTab?.result &&
     "columns" in activeTab.result &&
@@ -187,8 +186,8 @@ export function QueryToolbar() {
   const exportName = activeTab?.title?.replace(/\s+/g, "_") ?? "export";
 
   return (
-    <div className="flex items-center gap-1 px-2 py-1 border-b panel-toolbar shrink-0">
-      {/* Execute group */}
+    <div className="flex items-center gap-0.5 px-1.5 h-8 border-b panel-toolbar shrink-0">
+      {/* Execute */}
       <Tooltip>
         <TooltipTrigger asChild>
           {activeTab?.isRunning ? (
@@ -196,31 +195,31 @@ export function QueryToolbar() {
               size="sm"
               variant="destructive"
               onClick={handleCancel}
-              className="gap-1.5"
+              className="h-7 gap-1.5 px-2.5 text-xs"
             >
-              <Square className="h-3.5 w-3.5" />
-              Stop
+              <Square className="h-3 w-3" />
+              {t("toolbar.stop")}
             </Button>
           ) : (
             <Button
               size="sm"
               onClick={handleRun}
               disabled={!isConnected || !activeTab?.sql.trim()}
-              className="gap-1.5"
+              className="h-7 gap-1.5 px-2.5 text-xs"
             >
-              <Play className="h-3.5 w-3.5" />
-              Run
+              <Play className="h-3 w-3" />
+              {t("toolbar.run")}
             </Button>
           )}
         </TooltipTrigger>
-        <TooltipContent side="bottom" className="text-xs">
+        <TooltipContent side="bottom">
           {activeTab?.isRunning
-            ? "Cancel query"
+            ? t("toolbar.cancelQuery")
             : !isConnected
-              ? "Connect to a database first"
+              ? t("toolbar.connectFirst")
               : !activeTab?.sql.trim()
-                ? "Write a query to execute"
-                : `Execute query (${mod}+Enter)`}
+                ? t("toolbar.writeQuery")
+                : t("toolbar.execute", { mod })}
         </TooltipContent>
       </Tooltip>
 
@@ -228,40 +227,40 @@ export function QueryToolbar() {
         <TooltipTrigger asChild>
           <Button
             variant="ghost"
-            size="sm"
+            size="icon"
+            className="h-7 w-7"
+            aria-label={t("toolbar.explain")}
             onClick={handleExplain}
             disabled={
               !isConnected || !activeTab?.sql.trim() || activeTab?.isRunning
             }
-            className="gap-1.5"
           >
             <FileSearch className="h-3.5 w-3.5" />
-            Explain
           </Button>
         </TooltipTrigger>
-        <TooltipContent side="bottom" className="text-xs">
-          Explain query plan ({mod}+E)
+        <TooltipContent side="bottom">
+          {t("toolbar.explainShortcut", { mod })}
         </TooltipContent>
       </Tooltip>
 
       <div className="toolbar-separator" />
 
-      {/* Edit group */}
+      {/* Edit */}
       <Tooltip>
         <TooltipTrigger asChild>
           <Button
             variant="ghost"
-            size="sm"
+            size="icon"
+            className="h-7 w-7"
+            aria-label={t("toolbar.format")}
             onClick={handleFormat}
             disabled={!activeTab?.sql.trim()}
-            className="gap-1.5"
           >
             <AlignLeft className="h-3.5 w-3.5" />
-            Format
           </Button>
         </TooltipTrigger>
-        <TooltipContent side="bottom" className="text-xs">
-          Format SQL ({mod}+Shift+F)
+        <TooltipContent side="bottom">
+          {t("toolbar.formatShortcut", { mod })}
         </TooltipContent>
       </Tooltip>
 
@@ -269,58 +268,51 @@ export function QueryToolbar() {
         <TooltipTrigger asChild>
           <Button
             variant="ghost"
-            size="sm"
+            size="icon"
+            className="h-7 w-7"
+            aria-label={t("toolbar.openFile")}
             onClick={handleOpenFile}
-            className="gap-1.5"
           >
-            <Upload className="h-3.5 w-3.5" />
-            Open .sql
+            <FolderOpen className="h-3.5 w-3.5" />
           </Button>
         </TooltipTrigger>
-        <TooltipContent side="bottom" className="text-xs">
-          Open a .sql file into a new tab
-        </TooltipContent>
+        <TooltipContent side="bottom">{t("toolbar.openFile")}</TooltipContent>
       </Tooltip>
 
       <Tooltip>
         <TooltipTrigger asChild>
           <Button
             variant="ghost"
-            size="sm"
+            size="icon"
+            className="h-7 w-7"
+            aria-label={t("toolbar.saveFile")}
             onClick={() => {
               if (activeTab?.sql.trim()) {
                 const name = activeTab.title.replace(/\s+/g, "_");
-                downloadFile(activeTab.sql, `${name}.sql`, "text/plain");
+                saveFile(activeTab.sql, `${name}.sql`, "text/plain");
               }
             }}
             disabled={!activeTab?.sql.trim()}
-            className="gap-1.5"
           >
             <Save className="h-3.5 w-3.5" />
-            Save .sql
           </Button>
         </TooltipTrigger>
-        <TooltipContent side="bottom" className="text-xs">
-          Save query as .sql file
-        </TooltipContent>
+        <TooltipContent side="bottom">{t("toolbar.saveFile")}</TooltipContent>
       </Tooltip>
 
-      <input
-        ref={fileInputRef}
-        type="file"
-        accept=".sql,text/plain"
-        className="hidden"
-        onChange={handleFileSelected}
-      />
 
       {hasQueryResult && (
         <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <Button variant="ghost" size="sm" className="gap-1.5">
-              <Download className="h-3.5 w-3.5" />
-              Export
-            </Button>
-          </DropdownMenuTrigger>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <DropdownMenuTrigger asChild>
+                <Button variant="ghost" size="icon" className="h-7 w-7" aria-label={t("toolbar.exportResults")}>
+                  <FileOutput className="h-3.5 w-3.5" />
+                </Button>
+              </DropdownMenuTrigger>
+            </TooltipTrigger>
+            <TooltipContent side="bottom">{t("toolbar.exportResults")}</TooltipContent>
+          </Tooltip>
           <DropdownMenuContent>
             <DropdownMenuItem
               onClick={() => {
@@ -329,7 +321,7 @@ export function QueryToolbar() {
                   exportCSV(r as QueryResult, exportName);
               }}
             >
-              Export as CSV
+              {t("toolbar.exportCsv")}
             </DropdownMenuItem>
             <DropdownMenuItem
               onClick={() => {
@@ -338,7 +330,7 @@ export function QueryToolbar() {
                   exportJSON(r as QueryResult, exportName);
               }}
             >
-              Export as JSON
+              {t("toolbar.exportJson")}
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
@@ -346,21 +338,25 @@ export function QueryToolbar() {
 
       <div className="toolbar-separator" />
 
-      {/* Library group */}
+      {/* Library */}
       {queryHistory.length > 0 && (
         <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <Button variant="ghost" size="sm" className="gap-1.5">
-              <History className="h-3.5 w-3.5" />
-              History
-            </Button>
-          </DropdownMenuTrigger>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <DropdownMenuTrigger asChild>
+                <Button variant="ghost" size="icon" className="h-7 w-7" aria-label={t("toolbar.history")}>
+                  <History className="h-3.5 w-3.5" />
+                </Button>
+              </DropdownMenuTrigger>
+            </TooltipTrigger>
+            <TooltipContent side="bottom">{t("toolbar.history")}</TooltipContent>
+          </Tooltip>
           <DropdownMenuContent align="start" className="w-80">
             <ScrollArea className="max-h-60">
               {queryHistory.map((sql) => (
                 <DropdownMenuItem
                   key={sql}
-                  className="text-xs font-data py-1.5"
+                  className="text-xs font-data py-1"
                   onClick={() => {
                     if (activeTab) {
                       updateTabSql(activeTab.id, sql);
@@ -379,23 +375,21 @@ export function QueryToolbar() {
         <TooltipTrigger asChild>
           <Button
             variant="ghost"
-            size="sm"
+            size="icon"
+            className="h-7 w-7"
+            aria-label={t("toolbar.saveBookmark")}
             onClick={handleSaveBookmark}
             disabled={!activeTab?.sql.trim()}
-            className="gap-1.5"
           >
             <BookmarkCheck className="h-3.5 w-3.5" />
-            Save
           </Button>
         </TooltipTrigger>
-        <TooltipContent side="bottom" className="text-xs">
-          Save query as bookmark
-        </TooltipContent>
+        <TooltipContent side="bottom">{t("toolbar.saveBookmark")}</TooltipContent>
       </Tooltip>
 
       {showSaveInput && (
         <form
-          className="flex items-center gap-1"
+          className="flex items-center gap-0.5"
           onSubmit={(e) => {
             e.preventDefault();
             handleSaveBookmark();
@@ -403,8 +397,8 @@ export function QueryToolbar() {
         >
           <input
             ref={saveInputRef}
-            className="h-7 w-36 px-2 text-sm border rounded-md bg-background"
-            placeholder="Bookmark name"
+            className="h-7 w-32 px-2 text-xs border rounded bg-background"
+            placeholder={t("toolbar.bookmarkName")}
             value={bookmarkName}
             onChange={(e) => setBookmarkName(e.target.value)}
             onKeyDown={(e) => {
@@ -414,26 +408,30 @@ export function QueryToolbar() {
               }
             }}
           />
-          <Button type="submit" size="sm" variant="ghost" className="h-7 px-2">
-            OK
+          <Button type="submit" size="sm" variant="ghost" className="h-7 px-2 text-xs">
+            {t("toolbar.ok")}
           </Button>
         </form>
       )}
 
       {bookmarks.length > 0 && (
         <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <Button variant="ghost" size="sm" className="gap-1.5">
-              <Bookmark className="h-3.5 w-3.5" />
-              Bookmarks
-            </Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="start" className="w-80">
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <DropdownMenuTrigger asChild>
+                <Button variant="ghost" size="icon" className="h-7 w-7" aria-label={t("toolbar.bookmarks")}>
+                  <Bookmark className="h-3.5 w-3.5" />
+                </Button>
+              </DropdownMenuTrigger>
+            </TooltipTrigger>
+            <TooltipContent side="bottom">{t("toolbar.bookmarks")}</TooltipContent>
+          </Tooltip>
+          <DropdownMenuContent align="start" className="w-72">
             <ScrollArea className="max-h-60">
               {bookmarks.map((bm) => (
                 <DropdownMenuItem
                   key={bm.id}
-                  className="text-sm py-1.5 flex items-center gap-2"
+                  className="text-xs py-1 flex items-center gap-2"
                   onClick={() => handleLoadBookmark(bm.sql, bm.name)}
                 >
                   <div className="flex-1 min-w-0">
@@ -448,9 +446,9 @@ export function QueryToolbar() {
                       e.stopPropagation();
                       removeBookmark(bm.id);
                     }}
-                    aria-label={`Remove bookmark ${bm.name}`}
+                    aria-label={t("toolbar.removeBookmark", { name: bm.name })}
                   >
-                    <X className="h-3.5 w-3.5" />
+                    <X className="h-3 w-3" />
                   </button>
                 </DropdownMenuItem>
               ))}
@@ -461,13 +459,13 @@ export function QueryToolbar() {
 
       <div className="flex-1" />
       {isRunning && (
-        <span className="text-xs text-muted-foreground tabular-nums flex items-center gap-1.5">
-          <Loader2 className="h-3 w-3 animate-spin" />
+        <span className="text-xs text-muted-foreground tabular-nums flex items-center gap-1">
+          <Loader2 className="h-2.5 w-2.5 animate-spin" />
           {elapsed.toFixed(1)}s
         </span>
       )}
       {!isRunning && stats && (
-        <span className="text-xs text-muted-foreground tabular-nums">
+        <span className="text-xs text-muted-foreground/70 tabular-nums">
           {stats}
         </span>
       )}

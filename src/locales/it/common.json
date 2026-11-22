@@ -1,0 +1,26 @@
+{
+  "errorBoundary": {
+    "title": "Si è verificato un problema",
+    "unexpected": "Si è verificato un errore imprevisto.",
+    "tryAgain": "Riprova"
+  },
+  "errors": {
+    "unknown": "Errore sconosciuto",
+    "queryCancelled": "Query annullata",
+    "restoreCancelled": "Ripristino annullato dall'utente"
+  },
+  "fileTypes": {
+    "ext": "File {{ext}}",
+    "sql": "File SQL",
+    "all": "Tutti i file"
+  },
+  "save": {
+    "saved": "{{name}} salvato",
+    "failed": "Impossibile salvare {{name}}"
+  },
+  "native": {
+    "openDatabase": "Apri database Stoolap",
+    "ok": "OK",
+    "cancel": "Annulla"
+  }
+}

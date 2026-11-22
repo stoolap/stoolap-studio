@@ -1,6 +1,6 @@
-"use client";
 
 import { useState, useMemo } from "react";
+import { useTranslation } from "react-i18next";
 import {
   Dialog,
   DialogContent,
@@ -26,7 +26,7 @@ import {
 } from "@/components/ui/tooltip";
 import { CircleHelp } from "lucide-react";
 import { useConnectionStore } from "@/stores/connection-store";
-import { quoteId, errorMessage } from "@/lib/utils";
+import { errorMessage, quoteId } from "@/lib/utils";
 import * as api from "@/lib/api-client";
 import type { ColumnInfo } from "@/lib/types";
 
@@ -45,6 +45,7 @@ export function CreateIndexDialog({
   columns,
   onCreated,
 }: CreateIndexDialogProps) {
+  const { t } = useTranslation("dialogs");
   const activeId = useConnectionStore((s) => s.activeId);
   const [indexName, setIndexName] = useState("");
   const [selectedColumns, setSelectedColumns] = useState<string[]>([]);
@@ -110,7 +111,7 @@ export function CreateIndexDialog({
     setLoading(true);
     setError("");
     try {
-      await api.executeQuery(activeId, generateSQL());
+      await api.runSql(activeId, generateSQL());
       onCreated();
       resetAndClose();
     } catch (e) {
@@ -130,12 +131,12 @@ export function CreateIndexDialog({
     >
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
-          <DialogTitle>Create Index on {table}</DialogTitle>
+          <DialogTitle>{t("createIndex.title", { table })}</DialogTitle>
         </DialogHeader>
 
         <div className="space-y-4 py-2">
           <div className="space-y-2">
-            <Label>Index Name</Label>
+            <Label>{t("createIndex.name")}</Label>
             <Input
               placeholder={`idx_${table}_`}
               value={indexName}
@@ -144,7 +145,7 @@ export function CreateIndexDialog({
           </div>
 
           <div className="space-y-2">
-            <Label>Columns</Label>
+            <Label>{t("createIndex.columns")}</Label>
             <div className="space-y-1 max-h-[200px] overflow-y-auto border rounded-md p-2">
               {columns.map((col) => (
                 <label
@@ -166,7 +167,7 @@ export function CreateIndexDialog({
 
           {/* Index type */}
           <div className="space-y-2">
-            <Label>Index Type</Label>
+            <Label>{t("createIndex.type")}</Label>
             <Select
               value={indexType}
               onValueChange={(v) => {
@@ -178,9 +179,9 @@ export function CreateIndexDialog({
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="standard">Standard (BTree/Hash)</SelectItem>
+                <SelectItem value="standard">{t("createIndex.standard")}</SelectItem>
                 <SelectItem value="hnsw" disabled={!canUseHnsw}>
-                  HNSW (Vector Search)
+                  {t("createIndex.hnsw")}
                 </SelectItem>
               </SelectContent>
             </Select>
@@ -190,20 +191,18 @@ export function CreateIndexDialog({
           {indexType === "hnsw" && (
             <div className="space-y-3 p-3 border rounded-md bg-muted/20">
               <Label className="text-xs font-medium text-muted-foreground">
-                HNSW Parameters
+                {t("createIndex.hnswParams")}
               </Label>
               <div className="space-y-2">
                 <div className="flex items-center gap-2">
                   <div className="w-28 shrink-0 flex items-center gap-1">
-                    <Label className="text-sm">Metric</Label>
+                    <Label className="text-sm">{t("createIndex.metric")}</Label>
                     <Tooltip>
                       <TooltipTrigger asChild>
                         <CircleHelp className="h-3.5 w-3.5 text-muted-foreground" />
                       </TooltipTrigger>
                       <TooltipContent side="right" className="max-w-[280px]">
-                        L2 = Euclidean distance (general purpose). Cosine =
-                        angle-based (text embeddings). IP = dot product (max
-                        inner product search).
+                        {t("createIndex.metricHint")}
                       </TooltipContent>
                     </Tooltip>
                   </div>
@@ -212,9 +211,9 @@ export function CreateIndexDialog({
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="l2">L2 (Euclidean)</SelectItem>
-                      <SelectItem value="cosine">Cosine</SelectItem>
-                      <SelectItem value="ip">Inner Product</SelectItem>
+                      <SelectItem value="l2">{t("metrics.l2")}</SelectItem>
+                      <SelectItem value="cosine">{t("metrics.cosine")}</SelectItem>
+                      <SelectItem value="ip">{t("metrics.ip")}</SelectItem>
                     </SelectContent>
                   </Select>
                 </div>
@@ -226,13 +225,12 @@ export function CreateIndexDialog({
                         <CircleHelp className="h-3.5 w-3.5 text-muted-foreground" />
                       </TooltipTrigger>
                       <TooltipContent side="right" className="max-w-[280px]">
-                        Max connections per node (4-64). Higher = better recall,
-                        more memory.
+                        {t("createIndex.mHint")}
                       </TooltipContent>
                     </Tooltip>
                   </div>
                   <Input
-                    placeholder="auto"
+                    placeholder={t("createIndex.auto")}
                     value={hnswM}
                     onChange={(e) =>
                       setHnswM(e.target.value.replace(/\D/g, ""))
@@ -248,13 +246,12 @@ export function CreateIndexDialog({
                         <CircleHelp className="h-3.5 w-3.5 text-muted-foreground" />
                       </TooltipTrigger>
                       <TooltipContent side="right" className="max-w-[280px]">
-                        Search width during build (50-1000). Higher = better
-                        index quality, slower build.
+                        {t("createIndex.efConstructionHint")}
                       </TooltipContent>
                     </Tooltip>
                   </div>
                   <Input
-                    placeholder="auto"
+                    placeholder={t("createIndex.auto")}
                     value={hnswEfConstruction}
                     onChange={(e) =>
                       setHnswEfConstruction(e.target.value.replace(/\D/g, ""))
@@ -270,13 +267,12 @@ export function CreateIndexDialog({
                         <CircleHelp className="h-3.5 w-3.5 text-muted-foreground" />
                       </TooltipTrigger>
                       <TooltipContent side="right" className="max-w-[280px]">
-                        Search width during queries (10-1000). Higher = better
-                        recall, slower queries.
+                        {t("createIndex.efSearchHint")}
                       </TooltipContent>
                     </Tooltip>
                   </div>
                   <Input
-                    placeholder="auto"
+                    placeholder={t("createIndex.auto")}
                     value={hnswEfSearch}
                     onChange={(e) =>
                       setHnswEfSearch(e.target.value.replace(/\D/g, ""))
@@ -294,14 +290,14 @@ export function CreateIndexDialog({
                 checked={isUnique}
                 onCheckedChange={(v) => setIsUnique(!!v)}
               />
-              Unique Index
+              {t("createIndex.unique")}
             </label>
           )}
 
           {indexName && selectedColumns.length > 0 && (
             <div className="space-y-1">
               <Label className="text-xs text-muted-foreground">
-                Generated SQL
+                {t("actions.generatedSql")}
               </Label>
               <pre className="text-xs p-2 rounded bg-muted font-mono whitespace-pre-wrap">
                 {generateSQL()}
@@ -314,15 +310,16 @@ export function CreateIndexDialog({
 
         <DialogFooter>
           <Button variant="outline" onClick={resetAndClose}>
-            Cancel
+            {t("actions.cancel")}
           </Button>
           <Button
+            data-default
             onClick={handleCreate}
             disabled={
               loading || !indexName.trim() || selectedColumns.length === 0
             }
           >
-            {loading ? "Creating..." : "Create Index"}
+            {loading ? t("actions.creating") : t("createIndex.create")}
           </Button>
         </DialogFooter>
       </DialogContent>

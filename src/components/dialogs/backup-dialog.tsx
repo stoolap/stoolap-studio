@@ -1,6 +1,6 @@
-"use client";
 
 import { useState } from "react";
+import { Trans, useTranslation } from "react-i18next";
 import {
   Dialog,
   DialogContent,
@@ -12,22 +12,19 @@ import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Checkbox } from "@/components/ui/checkbox";
 import { useConnectionStore } from "@/stores/connection-store";
-import { Loader2, Download } from "lucide-react";
+import { Loader2, Save } from "lucide-react";
 import { toast } from "sonner";
-import { downloadFile, errorMessage } from "@/lib/utils";
-import { quoteId } from "@/lib/sql-utils";
+import { errorMessage, saveFile } from "@/lib/utils";
 import { parseForeignKeys } from "@/lib/fk-parser";
 import * as api from "@/lib/api-client";
 import {
   DEFAULT_DUMP_OPTIONS,
   generateHeader,
   generateTableDrops,
-  generateTableSection,
   generateTableIndexes,
   generateViewSection,
 } from "@/lib/sql-dump";
 import type { DumpOptions } from "@/lib/sql-dump";
-import type { QueryResult } from "@/lib/types";
 
 interface BackupDialogProps {
   open: boolean;
@@ -35,6 +32,7 @@ interface BackupDialogProps {
 }
 
 export function BackupDialog({ open, onOpenChange }: BackupDialogProps) {
+  const { t } = useTranslation("dialogs");
   const activeId = useConnectionStore((s) => s.activeId);
   const connections = useConnectionStore((s) => s.connections);
   const activeConn = connections.find((c) => c.id === activeId);
@@ -62,97 +60,85 @@ export function BackupDialog({ open, onOpenChange }: BackupDialogProps) {
     if (!activeId || !activeConn) return;
     setLoading(true);
     setError("");
-    setProgress("Fetching table list...");
+
+    const ts = new Date().toISOString().slice(0, 19).replace(/[T:]/g, "-");
+    const connName = activeConn.name.replace(/\s+/g, "_").toLowerCase();
+
+    // The dump is gathered page by page, then handed to the browser to save
+    const chunks: string[] = [];
+    const writeChunk = async (chunk: string) => {
+      if (chunk) chunks.push(chunk);
+    };
 
     try {
-      const parts: string[] = [];
-      parts.push(generateHeader(activeConn.name));
+      setProgress(t("backup.writingHeader"));
+      await writeChunk(generateHeader(activeConn.name));
 
       if (options.tables) {
+        setProgress(t("backup.fetchingTables"));
         const tables = await api.fetchTables(activeId);
 
-        // Sort tables by FK dependencies (referenced tables first)
-        setProgress("Analyzing table dependencies...");
+        setProgress(t("backup.analyzing"));
         const tableOrder = await sortTablesByFKDeps(activeId, tables);
 
         if (options.dropBeforeCreate) {
-          parts.push(generateTableDrops(tableOrder));
+          await writeChunk(generateTableDrops(tableOrder));
         }
 
         for (let i = 0; i < tableOrder.length; i++) {
           const tableName = tableOrder[i];
           setProgress(
-            `Exporting table ${i + 1}/${tableOrder.length}: ${tableName}`,
+            t("backup.exportingTable", { index: i + 1, total: tableOrder.length, name: tableName }),
           );
 
           const ddl = await api.fetchDDL(activeId, tableName, "table");
+          const section = `-- Table: ${tableName}\n${ddl};\n\n`;
+          await writeChunk(section);
 
-          // Fetch column types from DESCRIBE (needed for Vector dimensions)
-          const colInfos = await api.describeTable(activeId, tableName);
-          const columnTypes = colInfos.map((c) => c.type);
-
-          let columns: string[] = [];
-          const rows: unknown[][] = [];
           if (options.data) {
             const PAGE = 10000;
             let pageOffset = 0;
-            let hasMore = true;
-            while (hasMore) {
-              const result = await api.executeQuery(
+            // eslint-disable-next-line no-constant-condition
+            while (true) {
+              const page = await api.fetchTableInserts(
                 activeId,
-                `SELECT * FROM ${quoteId(tableName)} LIMIT ${PAGE} OFFSET ${pageOffset}`,
+                tableName,
+                pageOffset,
+                PAGE,
               );
-              if (
-                "columns" in result &&
-                "rows" in result &&
-                !("error" in result)
-              ) {
-                const qr = result as QueryResult;
-                if (columns.length === 0) columns = qr.columns;
-                rows.push(...qr.rows);
-                hasMore = qr.rows.length === PAGE;
-                pageOffset += PAGE;
-              } else {
-                hasMore = false;
-              }
+              if (page.rows > 0) await writeChunk(page.sql + "\n");
+              if (page.rows < PAGE) break;
+              pageOffset += PAGE;
             }
+            await writeChunk("\n");
           }
-
-          // Use DESCRIBE column names if data was not fetched
-          if (columns.length === 0) {
-            columns = colInfos.map((c) => c.field);
-          }
-
-          parts.push(
-            generateTableSection(tableName, ddl, columns, rows, options, columnTypes),
-          );
 
           if (options.indexes) {
             const indexes = await api.fetchIndexes(activeId, tableName);
             const indexSql = generateTableIndexes(tableName, indexes);
             if (indexSql) {
-              parts.push(indexSql);
+              await writeChunk(indexSql);
             }
           }
         }
       }
 
       if (options.views) {
-        setProgress("Fetching views...");
+        setProgress(t("backup.fetchingViews"));
         const views = await api.fetchViews(activeId);
         for (let i = 0; i < views.length; i++) {
           const viewName = views[i];
-          setProgress(`Exporting view ${i + 1}/${views.length}: ${viewName}`);
+          setProgress(t("backup.exportingView", { index: i + 1, total: views.length, name: viewName }));
           const ddl = await api.fetchDDL(activeId, viewName, "view");
-          parts.push(generateViewSection(viewName, ddl, options));
+          await writeChunk(generateViewSection(viewName, ddl, options));
         }
       }
 
-      const content = parts.join("\n");
-      const ts = new Date().toISOString().slice(0, 19).replace(/[T:]/g, "-");
-      const connName = activeConn.name.replace(/\s+/g, "_").toLowerCase();
-      downloadFile(content, `${connName}_${ts}.sql`, "application/sql");
-      toast.success("Backup downloaded");
+      saveFile(chunks.join(""), `${connName}_${ts}.sql`, "application/sql");
+      import("@/lib/native").then((n) =>
+        n.notify(t("backup.notifyTitle"), t("backup.notifyBody", { name: activeConn.name })),
+      );
+      toast.success(t("backup.exported"));
       resetAndClose();
     } catch (e) {
       setError(errorMessage(e));
@@ -172,31 +158,32 @@ export function BackupDialog({ open, onOpenChange }: BackupDialogProps) {
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
-            <Download className="h-5 w-5" />
-            Backup Database
+            <Save className="h-5 w-5" />
+            {t("backup.title")}
           </DialogTitle>
         </DialogHeader>
 
         <div className="space-y-4 py-2">
           {activeConn && (
             <p className="text-sm text-muted-foreground">
-              Export{" "}
-              <span className="font-medium text-foreground">
-                {activeConn.name}
-              </span>{" "}
-              as a SQL dump file.
+              <Trans
+                t={t}
+                i18nKey="backup.intro"
+                values={{ name: activeConn.name }}
+                components={{ b: <span className="font-medium text-foreground" /> }}
+              />
             </p>
           )}
 
           <div className="space-y-3">
-            <Label className="text-sm font-medium">Include</Label>
+            <Label className="text-sm font-medium">{t("backup.include")}</Label>
             <label className="flex items-center gap-2 text-sm cursor-pointer">
               <Checkbox
                 checked={options.tables}
                 onCheckedChange={() => toggleOption("tables")}
                 disabled={loading}
               />
-              Table structures (DDL)
+              {t("backup.tables")}
             </label>
             <label className="flex items-center gap-2 text-sm cursor-pointer">
               <Checkbox
@@ -204,7 +191,7 @@ export function BackupDialog({ open, onOpenChange }: BackupDialogProps) {
                 onCheckedChange={() => toggleOption("data")}
                 disabled={loading || !options.tables}
               />
-              Table data (INSERT statements)
+              {t("backup.data")}
             </label>
             <label className="flex items-center gap-2 text-sm cursor-pointer">
               <Checkbox
@@ -212,7 +199,7 @@ export function BackupDialog({ open, onOpenChange }: BackupDialogProps) {
                 onCheckedChange={() => toggleOption("indexes")}
                 disabled={loading || !options.tables}
               />
-              Indexes
+              {t("backup.indexes")}
             </label>
             <label className="flex items-center gap-2 text-sm cursor-pointer">
               <Checkbox
@@ -220,7 +207,7 @@ export function BackupDialog({ open, onOpenChange }: BackupDialogProps) {
                 onCheckedChange={() => toggleOption("views")}
                 disabled={loading}
               />
-              Views
+              {t("backup.views")}
             </label>
             <label className="flex items-center gap-2 text-sm cursor-pointer">
               <Checkbox
@@ -228,7 +215,7 @@ export function BackupDialog({ open, onOpenChange }: BackupDialogProps) {
                 onCheckedChange={() => toggleOption("dropBeforeCreate")}
                 disabled={loading}
               />
-              DROP IF EXISTS before CREATE
+              {t("backup.dropBeforeCreate")}
             </label>
           </div>
 
@@ -244,10 +231,10 @@ export function BackupDialog({ open, onOpenChange }: BackupDialogProps) {
 
         <DialogFooter>
           <Button variant="outline" onClick={resetAndClose} disabled={loading}>
-            Cancel
+            {t("actions.cancel")}
           </Button>
-          <Button onClick={handleBackup} disabled={loading}>
-            {loading ? "Exporting..." : "Download .sql"}
+          <Button onClick={handleBackup} disabled={loading} data-default>
+            {loading ? t("backup.exporting") : t("backup.export")}
           </Button>
         </DialogFooter>
       </DialogContent>

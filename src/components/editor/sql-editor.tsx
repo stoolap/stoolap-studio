@@ -1,7 +1,7 @@
-"use client";
 
 import { useCallback, useRef, useMemo, useEffect } from "react";
-import CodeMirror, { ReactCodeMirrorRef } from "@uiw/react-codemirror";
+import { useTranslation } from "react-i18next";
+import CodeMirror, { Prec, ReactCodeMirrorRef } from "@uiw/react-codemirror";
 import { sql, SQLDialect } from "@codemirror/lang-sql";
 import { oneDark } from "@codemirror/theme-one-dark";
 import { keymap } from "@codemirror/view";
@@ -10,10 +10,11 @@ import {
   type CompletionSource,
 } from "@codemirror/autocomplete";
 import { useEditorStore } from "@/stores/editor-store";
+import { clearActiveEditorView, setActiveEditorView } from "@/lib/editor-registry";
 import { useQueryExecution } from "@/hooks/use-query-execution";
 
 // Stoolap SQL dialect with Stoolap-specific keywords and functions
-const StoolapDialect = SQLDialect.define({
+export const StoolapDialect = SQLDialect.define({
   keywords:
     // Standard SQL
     "select from where and or not in between like is null true false as on " +
@@ -73,6 +74,7 @@ interface SqlEditorProps {
 }
 
 export function SqlEditor({ tabId, value, isDark, schema }: SqlEditorProps) {
+  const { t } = useTranslation("editor");
   const editorRef = useRef<ReactCodeMirrorRef>(null);
   const updateTabSql = useEditorStore((s) => s.updateTabSql);
   const { executeQuery } = useQueryExecution();
@@ -86,6 +88,12 @@ export function SqlEditor({ tabId, value, isDark, schema }: SqlEditorProps) {
   useEffect(() => {
     tabIdRef.current = tabId;
   }, [tabId]);
+
+  // Run and Explain read the selection through the registry
+  useEffect(() => {
+    const view = editorRef.current?.view;
+    return () => clearActiveEditorView(view);
+  }, []);
 
   const handleChange = useCallback(
     (val: string) => {
@@ -116,12 +124,16 @@ export function SqlEditor({ tabId, value, isDark, schema }: SqlEditorProps) {
   /* eslint-disable react-hooks/refs -- ref is read in key handler, not during render */
   const customKeymap = useMemo(
     () =>
-      keymap.of([
-        {
-          key: "Mod-Enter",
-          run: () => runQueryRef.current(),
-        },
-      ]),
+      // Highest precedence: the default keymap binds Mod-Enter to
+      // insertBlankLine and would otherwise win.
+      Prec.highest(
+        keymap.of([
+          {
+            key: "Mod-Enter",
+            run: () => runQueryRef.current(),
+          },
+        ]),
+      ),
     [],
   );
   /* eslint-enable react-hooks/refs */
@@ -171,11 +183,12 @@ export function SqlEditor({ tabId, value, isDark, schema }: SqlEditorProps) {
     <div className="h-full overflow-auto border-b">
       <CodeMirror
         ref={editorRef}
+        onCreateEditor={setActiveEditorView}
         value={value}
         onChange={handleChange}
         theme={isDark ? oneDark : undefined}
         extensions={extensions}
-        placeholder="Type your SQL query here... (Ctrl/Cmd+Enter to run)"
+        placeholder={t("sqlEditor.placeholder")}
         basicSetup={{
           lineNumbers: true,
           highlightActiveLineGutter: true,
@@ -184,7 +197,9 @@ export function SqlEditor({ tabId, value, isDark, schema }: SqlEditorProps) {
           bracketMatching: true,
           closeBrackets: true,
         }}
-        className="text-sm"
+        // h-full: the wrapper must fill the pane for height="100%" to reach
+        // the editor, or clicks below the last line miss it
+        className="text-sm h-full"
         height="100%"
       />
     </div>

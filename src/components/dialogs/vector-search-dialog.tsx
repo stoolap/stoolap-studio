@@ -1,6 +1,6 @@
-"use client";
 
 import { useState, useMemo, useCallback, useEffect, useRef } from "react";
+import { useTranslation } from "react-i18next";
 import {
   Dialog,
   DialogContent,
@@ -24,7 +24,7 @@ import { Waypoints, Search, Code, Loader2 } from "lucide-react";
 import { useConnectionStore } from "@/stores/connection-store";
 import { useEditorStore } from "@/stores/editor-store";
 import { useTables, useTableColumns } from "@/hooks/use-schema";
-import { cn, quoteId, errorMessage } from "@/lib/utils";
+import { cn, errorMessage, quoteId } from "@/lib/utils";
 import {
   isDistanceColumn,
   formatVector,
@@ -42,9 +42,9 @@ interface VectorSearchDialogProps {
 }
 
 const METRICS = [
-  { value: "cosine", label: "Cosine", fn: "VEC_DISTANCE_COSINE" },
-  { value: "l2", label: "L2 (Euclidean)", fn: "VEC_DISTANCE_L2" },
-  { value: "ip", label: "Inner Product", fn: "VEC_DISTANCE_IP" },
+  { value: "cosine", label: "metrics.cosine", fn: "VEC_DISTANCE_COSINE" },
+  { value: "l2", label: "metrics.l2", fn: "VEC_DISTANCE_L2" },
+  { value: "ip", label: "metrics.ip", fn: "VEC_DISTANCE_IP" },
 ];
 
 export function VectorSearchDialog({
@@ -54,6 +54,7 @@ export function VectorSearchDialog({
   initialColumn,
   initialVector,
 }: VectorSearchDialogProps) {
+  const { t } = useTranslation("dialogs");
   const activeId = useConnectionStore((s) => s.activeId);
   const addTab = useEditorStore((s) => s.addTab);
   const setActiveTab = useEditorStore((s) => s.setActiveTab);
@@ -196,7 +197,7 @@ export function VectorSearchDialog({
                 const idx = result.columns.indexOf(col);
                 return String(r[idx] ?? "");
               });
-            const label = labelParts.join(" | ") || `Row`;
+            const label = labelParts.join(" | ") || t("vectorSearch.row");
             const raw = r[vecIdx];
             const vec = formatVector(raw);
             return { label, vector: vec };
@@ -208,7 +209,7 @@ export function VectorSearchDialog({
     } finally {
       setLoadingPick(false);
     }
-  }, [activeId, selectedTable, selectedColumn, labelColumns]);
+  }, [activeId, selectedTable, selectedColumn, labelColumns, t]);
 
   // Distance bar for results
   const distanceRange = useMemo(() => {
@@ -230,11 +231,11 @@ export function VectorSearchDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-2xl max-h-[85vh] flex flex-col">
+      <DialogContent className="sm:max-w-2xl max-h-[85vh] flex flex-col" showCloseButton>
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <Waypoints className="h-5 w-5 text-purple-500" />
-            Vector Similarity Search
+            {t("vectorSearch.title")}
           </DialogTitle>
         </DialogHeader>
 
@@ -242,7 +243,7 @@ export function VectorSearchDialog({
           {/* Table + Column + Metric row */}
           <div className="grid grid-cols-3 gap-3">
             <div className="space-y-1.5">
-              <Label className="text-xs">Table</Label>
+              <Label className="text-xs">{t("vectorSearch.table")}</Label>
               <Select
                 value={selectedTable}
                 onValueChange={(v) => {
@@ -253,12 +254,12 @@ export function VectorSearchDialog({
                 }}
               >
                 <SelectTrigger className="h-9 text-sm">
-                  <SelectValue placeholder="Select table..." />
+                  <SelectValue placeholder={t("vectorSearch.selectTable")} />
                 </SelectTrigger>
                 <SelectContent>
-                  {(allTables ?? []).map((t) => (
-                    <SelectItem key={t} value={t}>
-                      {t}
+                  {(allTables ?? []).map((name) => (
+                    <SelectItem key={name} value={name}>
+                      {name}
                     </SelectItem>
                   ))}
                 </SelectContent>
@@ -266,7 +267,7 @@ export function VectorSearchDialog({
             </div>
 
             <div className="space-y-1.5">
-              <Label className="text-xs">Vector Column</Label>
+              <Label className="text-xs">{t("vectorSearch.column")}</Label>
               <Select
                 value={selectedColumn}
                 onValueChange={setSelectedColumn}
@@ -276,8 +277,8 @@ export function VectorSearchDialog({
                   <SelectValue
                     placeholder={
                       vectorColumns.length === 0
-                        ? "No vector columns"
-                        : "Select..."
+                        ? t("vectorSearch.noVectorColumns")
+                        : t("vectorSearch.select")
                     }
                   />
                 </SelectTrigger>
@@ -287,7 +288,7 @@ export function VectorSearchDialog({
                       <span className="flex items-center gap-1.5">
                         <Waypoints className="h-3 w-3 text-purple-400" />
                         {c.field}
-                        <span className="text-[10px] text-muted-foreground">
+                        <span className="text-xs text-muted-foreground">
                           {c.type}
                         </span>
                       </span>
@@ -298,7 +299,7 @@ export function VectorSearchDialog({
             </div>
 
             <div className="space-y-1.5">
-              <Label className="text-xs">Distance Metric</Label>
+              <Label className="text-xs">{t("vectorSearch.metric")}</Label>
               <Select value={metric} onValueChange={setMetric}>
                 <SelectTrigger className="h-9 text-sm">
                   <SelectValue />
@@ -306,7 +307,7 @@ export function VectorSearchDialog({
                 <SelectContent>
                   {METRICS.map((m) => (
                     <SelectItem key={m.value} value={m.value}>
-                      {m.label}
+                      {t(m.label)}
                     </SelectItem>
                   ))}
                 </SelectContent>
@@ -316,7 +317,7 @@ export function VectorSearchDialog({
 
           {/* Query Vector */}
           <div className="space-y-1.5">
-            <Label className="text-xs">Query Vector</Label>
+            <Label className="text-xs">{t("vectorSearch.queryVector")}</Label>
             <Tabs
               defaultValue="paste"
               className="w-full"
@@ -326,10 +327,10 @@ export function VectorSearchDialog({
             >
               <TabsList className="h-8">
                 <TabsTrigger value="paste" className="text-xs px-3">
-                  Paste
+                  {t("vectorSearch.paste")}
                 </TabsTrigger>
                 <TabsTrigger value="pick" className="text-xs px-3">
-                  Pick from table
+                  {t("vectorSearch.pick")}
                 </TabsTrigger>
               </TabsList>
               <TabsContent value="paste">
@@ -348,8 +349,8 @@ export function VectorSearchDialog({
                   }}
                 />
                 {queryVector.trim() && !isValidVectorLiteral(queryVector) && (
-                  <p className="text-[11px] text-destructive mt-1">
-                    Must be a numeric array like [0.1, 0.2, 0.3]
+                  <p className="text-xs text-destructive mt-1">
+                    {t("vectorSearch.invalidVector", { example: "[0.1, 0.2, 0.3]" })}
                   </p>
                 )}
               </TabsContent>
@@ -361,7 +362,7 @@ export function VectorSearchDialog({
                     </div>
                   ) : pickRows.length === 0 ? (
                     <div className="p-4 text-xs text-muted-foreground text-center">
-                      {selectedTable ? "No rows found" : "Select a table first"}
+                      {selectedTable ? t("vectorSearch.noRows") : t("vectorSearch.selectTableFirst")}
                     </div>
                   ) : (
                     <div className="p-1 space-y-0.5">
@@ -384,7 +385,7 @@ export function VectorSearchDialog({
                             <div className="font-medium truncate">
                               {row.label}
                             </div>
-                            <div className="font-data text-[10px] text-muted-foreground truncate">
+                            <div className="font-data text-xs text-muted-foreground truncate">
                               {abbreviated}
                             </div>
                           </button>
@@ -400,7 +401,7 @@ export function VectorSearchDialog({
           {/* k + WHERE row */}
           <div className="grid grid-cols-[100px_1fr] gap-3">
             <div className="space-y-1.5">
-              <Label className="text-xs">k (limit)</Label>
+              <Label className="text-xs">{t("vectorSearch.limit")}</Label>
               <Input
                 type="number"
                 min={1}
@@ -413,9 +414,9 @@ export function VectorSearchDialog({
               />
             </div>
             <div className="space-y-1.5">
-              <Label className="text-xs">WHERE (optional)</Label>
+              <Label className="text-xs">{t("vectorSearch.where")}</Label>
               <Input
-                placeholder="e.g. category = 'Developer'"
+                placeholder={t("vectorSearch.wherePlaceholder", { example: "category = 'Developer'" })}
                 value={whereClause}
                 onChange={(e) => setWhereClause(e.target.value)}
                 className="h-9 text-sm font-data"
@@ -430,7 +431,7 @@ export function VectorSearchDialog({
           {generatedSQL && (
             <div className="space-y-1.5">
               <Label className="text-xs text-muted-foreground">
-                SQL Preview
+                {t("vectorSearch.sqlPreview")}
               </Label>
               <pre className="text-xs font-data bg-muted/50 border rounded-md p-3 overflow-x-auto whitespace-pre-wrap">
                 {generatedSQL}
@@ -449,9 +450,7 @@ export function VectorSearchDialog({
           {results && (
             <div className="space-y-1.5">
               <Label className="text-xs text-muted-foreground">
-                Results ({results.rows.length} row
-                {results.rows.length !== 1 ? "s" : ""},{" "}
-                {results.time.toFixed(1)}ms)
+                {t("vectorSearch.results", { count: results.rows.length, time: results.time.toFixed(1) })}
               </Label>
               <div className="border rounded-md overflow-hidden max-h-[300px] overflow-auto">
                 <table className="w-full text-xs">
@@ -536,7 +535,7 @@ export function VectorSearchDialog({
             className="gap-1.5"
           >
             <Code className="h-3.5 w-3.5" />
-            Open in Editor
+            {t("vectorSearch.openInEditor")}
           </Button>
           <Button
             size="sm"
@@ -549,7 +548,7 @@ export function VectorSearchDialog({
             ) : (
               <Search className="h-3.5 w-3.5" />
             )}
-            {searching ? "Searching..." : "Search"}
+            {searching ? t("vectorSearch.searching") : t("vectorSearch.search")}
           </Button>
         </DialogFooter>
       </DialogContent>

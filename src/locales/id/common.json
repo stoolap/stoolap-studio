@@ -1,0 +1,26 @@
+{
+  "errorBoundary": {
+    "title": "Terjadi kesalahan",
+    "unexpected": "Terjadi galat yang tidak terduga.",
+    "tryAgain": "Coba Lagi"
+  },
+  "errors": {
+    "unknown": "Galat tidak dikenal",
+    "queryCancelled": "Kueri dibatalkan",
+    "restoreCancelled": "Pemulihan dibatalkan oleh pengguna"
+  },
+  "fileTypes": {
+    "ext": "File {{ext}}",
+    "sql": "File SQL",
+    "all": "Semua File"
+  },
+  "save": {
+    "saved": "{{name}} disimpan",
+    "failed": "Tidak dapat menyimpan {{name}}"
+  },
+  "native": {
+    "openDatabase": "Buka Basis Data Stoolap",
+    "ok": "OK",
+    "cancel": "Batal"
+  }
+}

@@ -1,9 +1,10 @@
-"use client";
 
 import { useEffect, useRef } from "react";
 import { useEditorStore } from "@/stores/editor-store";
 import { useQueryExecution } from "@/hooks/use-query-execution";
 import { formatSQL } from "@/lib/sql-formatter";
+import { explainAll } from "@/lib/sql-utils";
+import { getEditorSelection } from "@/lib/editor-registry";
 
 export function KeyboardShortcuts() {
   const { executeQuery, isConnected } = useQueryExecution();
@@ -56,11 +57,8 @@ export function KeyboardShortcuts() {
           isConnectedRef.current &&
           !activeTab.isRunning
         ) {
-          const sql = activeTab.sql.trimStart();
-          const query = sql.toUpperCase().startsWith("EXPLAIN")
-            ? sql
-            : `EXPLAIN ${sql}`;
-          executeQuery(activeTab.id, query);
+          const sql = getEditorSelection().trim() || activeTab.sql;
+          executeQuery(activeTab.id, explainAll(sql));
         }
         return;
       }

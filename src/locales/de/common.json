@@ -1,0 +1,26 @@
+{
+  "errorBoundary": {
+    "title": "Etwas ist schiefgelaufen",
+    "unexpected": "Ein unerwarteter Fehler ist aufgetreten.",
+    "tryAgain": "Erneut versuchen"
+  },
+  "errors": {
+    "unknown": "Unbekannter Fehler",
+    "queryCancelled": "Abfrage abgebrochen",
+    "restoreCancelled": "Wiederherstellung vom Benutzer abgebrochen"
+  },
+  "fileTypes": {
+    "ext": "{{ext}}-Dateien",
+    "sql": "SQL-Dateien",
+    "all": "Alle Dateien"
+  },
+  "save": {
+    "saved": "{{name}} gespeichert",
+    "failed": "{{name}} konnte nicht gespeichert werden"
+  },
+  "native": {
+    "openDatabase": "Stoolap-Datenbank öffnen",
+    "ok": "OK",
+    "cancel": "Abbrechen"
+  }
+}

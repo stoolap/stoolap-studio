@@ -1,0 +1,36 @@
+{
+  "appShell": {
+    "hideSidebar": "사이드바 가리기",
+    "showSidebar": "사이드바 보기"
+  },
+  "statusBar": {
+    "inMemory": "인메모리",
+    "noConnection": "연결 없음",
+    "inMemoryHint": "메모리에만 있음: 데이터베이스나 앱을 닫으면 변경 내용이 사라집니다. 보관하려면 백업하세요.",
+    "transactionOpen": "트랜잭션 열림",
+    "transactionOpenHint": "세션이 트랜잭션 안에 있습니다. 실행한 내용은 커밋되지 않았으며 다른 세션에서는 보이지 않습니다. 유지하려면 COMMIT, 되돌리려면 ROLLBACK을 실행하세요."
+  },
+  "dataTab": {
+    "unavailable": "테이블 \"{{table}}\"을(를) 더 이상 사용할 수 없습니다: {{error}}",
+    "loading": "테이블 스키마를 불러오는 중..."
+  },
+  "agentToggle": {
+    "title": "에이전트",
+    "hide": "에이전트 가리기",
+    "show": "에이전트 보기"
+  },
+  "welcome": {
+    "openDatabase": "데이터베이스 열기…",
+    "newMemory": "새 인메모리 데이터베이스",
+    "loadExample": "예제 데이터베이스 불러오기",
+    "recent": "최근 항목",
+    "opening": "여는 중…",
+    "openFailed": "{{name}}을(를) 열 수 없습니다"
+  },
+  "toolbar": {
+    "examplesTab": "예제",
+    "loadExampleFailed": "예제를 불러오지 못했습니다",
+    "openFailed": "{{name}}을(를) 열 수 없습니다",
+    "createFailed": "데이터베이스를 생성하지 못했습니다"
+  }
+}

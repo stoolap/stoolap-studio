@@ -1,6 +1,6 @@
 # Stoolap Studio
 
-A visual database management studio for [Stoolap](https://github.com/stoolap/stoolap), built with Next.js. The Stoolap engine runs in-process on the Next.js server through the [@stoolap/node](https://www.npmjs.com/package/@stoolap/node) native driver, so there is no separate database server to run. Stoolap Studio 0.5.0 works with Stoolap 0.5.0 (`@stoolap/node` 0.5.0).
+A visual database management studio for [Stoolap](https://github.com/stoolap/stoolap), built with Next.js. The Stoolap engine runs in-process on the Next.js server through the [@stoolap/node](https://www.npmjs.com/package/@stoolap/node) native driver, so there is no separate database server to run. Stoolap Studio 0.5.1 works with Stoolap 0.5.1 (`@stoolap/node` 0.5.1). Its interface is [Stoolap Desktop](https://github.com/stoolap/stoolap-desktop)'s, in the browser.
 
 ## Features
 
@@ -10,7 +10,11 @@ A visual database management studio for [Stoolap](https://github.com/stoolap/sto
 - Execute queries with Cmd+Enter, view EXPLAIN plans with Cmd+E
 - SQL formatting, query history, and bookmarks
 - Open/save `.sql` files from disk
-- Multi-statement execution with automatic transaction wrapping
+- **Run** and **Explain** run only the selected text when there is a selection
+- Scripts: each statement's result shows as a tab ("Result #1: 10 rows"); writes are wrapped in a transaction that a failure rolls back, and the error says which statement failed and which never ran
+- A transaction you begin with BEGIN stays open across runs, shown in the status bar, and a script that begins one and fails never leaves it open
+- INSERT, UPDATE and DELETE with RETURNING show the rows they return
+- A query timeout in the status bar stops queries that run too long (5 minutes by default)
 
 ### Schema Browser
 - Sidebar tree view of all tables and views with search filtering
@@ -24,11 +28,12 @@ A visual database management studio for [Stoolap](https://github.com/stoolap/sto
 - Advanced filtering with multiple operators (=, !=, >, LIKE, IN, IS NULL, vector distance)
 - Time travel queries (AS OF TIMESTAMP)
 - CSV and JSON export (current page or all rows)
-- CSV import with batch insert
+- CSV and JSON import with `COPY`
+- Integers beyond JavaScript's safe range (2^53) show, edit and delete the right row
 
 ### Table & View Management
-- Create tables with a visual dialog: column types, constraints (PK, NOT NULL, UNIQUE, AUTO_INCREMENT), foreign keys, and default values
-- Alter tables (add/modify/drop columns)
+- Create tables with a visual dialog: column types, constraints (`PRIMARY KEY`, `NOT NULL`, `UNIQUE`, `AUTO_INCREMENT`, `CHECK`), foreign keys with `ON DELETE` / `ON UPDATE` actions, and defaults
+- Edit tables: add, rename, retype and drop columns; turn `NOT NULL` and `UNIQUE` on and off; set or remove a column's `DEFAULT` and `CHECK`; set the next `AUTO_INCREMENT` id. The SQL it will run shows before it runs
 - Create and drop views
 - DDL preview before execution
 
@@ -54,13 +59,12 @@ A visual database management studio for [Stoolap](https://github.com/stoolap/sto
 - SQL dump export with configurable options (tables, data, views, indexes, DROP IF EXISTS)
 - FK dependency-aware ordering: tables are created parents first and dropped children first
 - Index types (BTree, Hash, Bitmap, HNSW) are kept explicit in the dump
-- SQL dump import with progress tracking and transaction safety
+- Rows are written by the server from the engine's values, so 64-bit integers, JSON (`null` apart from SQL `NULL`) and backslashes come back exactly
+- SQL dump import with progress tracking; it stops at the first error and says what a failure rolls back
 
-### Theming
-- 6 accent color themes (Zinc, Blue, Green, Violet, Orange, Rose)
-- 4 IDE themes (Dracula, Nord, Catppuccin, GitHub Dark)
-- Light/Dark/System mode toggle
-- Persisted across sessions
+### Languages and Look
+- 16 languages: English, Türkçe, Deutsch, Français, Español, Português (Brasil), Italiano, Nederlands, Polski, Русский, Українська, 日本語, 한국어, 简体中文, 繁體中文 and Bahasa Indonesia. The app follows the browser's language; the menu's **Language** picks another, kept in the browser
+- Follows the system's light and dark mode
 
 ### Example Database
 - One-click example database with `customers`, `products`, `orders` tables, an `order_summary` view, and a `knowledge_base` table with 16-dimensional vector embeddings
@@ -106,6 +110,10 @@ npm start
 | Ctrl + Shift + Tab | Previous tab |
 | Cmd/Ctrl + ? | Shortcuts help |
 
+## How It Works
+
+The interface calls the server through one endpoint, `POST /api/rpc` with `{ cmd, args }`, by the names and arguments of Stoolap Desktop's Tauri commands, so the two apps share their interface code. The commands (`src/server/commands.ts`) run on `@stoolap/node`; `POST /api/import` takes an uploaded CSV or JSON file for `COPY`. Database paths are paths on the server's machine.
+
 ## Tech Stack
 
 - **Framework**: Next.js 16 (App Router)
@@ -114,27 +122,38 @@ npm start
 - **UI**: Radix UI primitives, shadcn/ui components, Tailwind CSS 4
 - **State**: Zustand with persist middleware
 - **Data**: TanStack Query (caching), TanStack Table (grid), TanStack Virtual (scrolling)
+- **Translations**: i18next, react-i18next
 - **Language**: TypeScript
 
 ## Project Structure
 
 ```
 src/
-  app/              # Next.js pages and API routes
-    api/            # REST API (connections, query, schema, data)
+  app/              # Next.js page and API routes
+    api/rpc/        # The UI's commands
+    api/import/     # CSV / JSON import with COPY
+  server/           # Connections, commands and values on @stoolap/node
   components/
-    layout/         # AppShell, Toolbar, Sidebar
+    layout/         # AppShell, AppMenu, Toolbar, Sidebar, Welcome
     editor/         # SqlEditor, EditorTabs, QueryToolbar
     results/        # ResultsPanel, DataGrid
     data/           # TableViewer, RowEditor
     schema/         # TableTree (sidebar schema browser)
-    dialogs/        # Connect, CreateTable, CreateView, CreateIndex,
-                    #   AlterTable, VectorSearch, Backup, Restore, etc.
-    common/         # ThemeSelector, KeyboardShortcuts, Providers
+    dialogs/        # Connect, CreateTable, AlterTable, CreateView, CreateIndex,
+                    #   VectorSearch, Backup, Restore, About, ShortcutsHelp
+    common/         # KeyboardShortcuts, NativeHost (confirmations, context menus)
     explain/        # ExplainView (EXPLAIN plan renderer)
   hooks/            # useQueryExecution, useSchema, useConnection, useModKey
-  stores/           # Zustand stores (editor, connection, bookmark, history)
-  lib/              # API client, utilities, SQL formatter, vector utils, types
+  stores/           # Zustand stores (editor, connection, bookmark, history, settings)
+  locales/          # Translations, one folder per language
+  lib/              # API client, i18n, SQL utilities and formatter, vector utils, types
+```
+
+## Tests
+
+```bash
+npm test          # UI and server tests; the server's run on the engine
+npm run typecheck
 ```
 
 ## License

@@ -1,0 +1,36 @@
+{
+  "appShell": {
+    "hideSidebar": "Masquer la barre latérale",
+    "showSidebar": "Afficher la barre latérale"
+  },
+  "statusBar": {
+    "inMemory": "En mémoire",
+    "noConnection": "Aucune connexion",
+    "inMemoryHint": "En mémoire uniquement : les modifications sont perdues à la fermeture de la base ou de l'application. Sauvegardez-la pour la conserver.",
+    "transactionOpen": "Transaction ouverte",
+    "transactionOpenHint": "Votre session est dans une transaction : ce que vous avez exécuté n'est pas validé et les autres sessions ne le voient pas. Exécutez COMMIT pour le garder ou ROLLBACK pour l'annuler."
+  },
+  "dataTab": {
+    "unavailable": "La table « {{table}} » n'est plus disponible : {{error}}",
+    "loading": "Chargement du schéma de la table..."
+  },
+  "agentToggle": {
+    "title": "Agent",
+    "hide": "Masquer l'agent",
+    "show": "Afficher l'agent"
+  },
+  "welcome": {
+    "openDatabase": "Ouvrir une base de données…",
+    "newMemory": "Nouvelle base de données en mémoire",
+    "loadExample": "Charger la base d'exemple",
+    "recent": "Récents",
+    "opening": "Ouverture…",
+    "openFailed": "Impossible d'ouvrir {{name}}"
+  },
+  "toolbar": {
+    "examplesTab": "Exemples",
+    "loadExampleFailed": "Impossible de charger l'exemple",
+    "openFailed": "Impossible d'ouvrir {{name}}",
+    "createFailed": "Impossible de créer la base de données"
+  }
+}

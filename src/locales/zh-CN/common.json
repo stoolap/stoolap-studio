@@ -1,0 +1,26 @@
+{
+  "errorBoundary": {
+    "title": "出现问题",
+    "unexpected": "发生意外错误。",
+    "tryAgain": "重试"
+  },
+  "errors": {
+    "unknown": "未知错误",
+    "queryCancelled": "查询已取消",
+    "restoreCancelled": "用户已取消恢复"
+  },
+  "fileTypes": {
+    "ext": "{{ext}} 文件",
+    "sql": "SQL 文件",
+    "all": "所有文件"
+  },
+  "save": {
+    "saved": "已保存 {{name}}",
+    "failed": "无法保存 {{name}}"
+  },
+  "native": {
+    "openDatabase": "打开 Stoolap 数据库",
+    "ok": "好",
+    "cancel": "取消"
+  }
+}

@@ -1,0 +1,26 @@
+{
+  "errorBoundary": {
+    "title": "發生問題",
+    "unexpected": "發生未預期的錯誤。",
+    "tryAgain": "再試一次"
+  },
+  "errors": {
+    "unknown": "未知的錯誤",
+    "queryCancelled": "查詢已取消",
+    "restoreCancelled": "使用者已取消還原"
+  },
+  "fileTypes": {
+    "ext": "{{ext}} 檔案",
+    "sql": "SQL 檔案",
+    "all": "所有檔案"
+  },
+  "save": {
+    "saved": "已儲存 {{name}}",
+    "failed": "無法儲存 {{name}}"
+  },
+  "native": {
+    "openDatabase": "打開 Stoolap 資料庫",
+    "ok": "好",
+    "cancel": "取消"
+  }
+}

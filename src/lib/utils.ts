@@ -1,5 +1,6 @@
 import { clsx, type ClassValue } from "clsx";
 import { twMerge } from "tailwind-merge";
+import i18n from "./i18n";
 export { quoteId } from "./sql-utils";
 
 export function cn(...inputs: ClassValue[]) {
@@ -10,10 +11,9 @@ export function cn(...inputs: ClassValue[]) {
 export function errorMessage(e: unknown): string {
   if (e instanceof Error) return e.message;
   if (typeof e === "string") return e;
-  return "Unknown error";
+  return i18n.t("common:errors.unknown");
 }
 
-/** Returns true if running on macOS (client-side only). */
 export function isMac(): boolean {
   if (typeof navigator === "undefined") return false;
   // @ts-expect-error -- userAgentData is not yet in all TS lib typings
@@ -22,27 +22,47 @@ export function isMac(): boolean {
   return navigator.userAgent?.includes("Mac") ?? false;
 }
 
-/** Returns the modifier key label for the current platform (Cmd or Ctrl). */
 export function modKey(): string {
   return isMac() ? "\u2318" : "Ctrl";
 }
 
-/** Download a string as a file in the browser. */
-export function downloadFile(content: string, filename: string, mime: string) {
-  const blob = new Blob([content], { type: mime });
-  const url = URL.createObjectURL(blob);
+/** Hand the browser a file to save, under `filename` */
+export function saveFile(content: string, filename: string, mime: string) {
+  const url = URL.createObjectURL(new Blob([content], { type: mime || "text/plain" }));
   const a = document.createElement("a");
   a.href = url;
   a.download = filename;
   a.click();
-  setTimeout(() => URL.revokeObjectURL(url), 100);
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
-/** Escape a value for CSV output. */
+/** Ask for a file (`accept` as an input's, ".sql,.txt"); its contents, or null when none was picked */
+export function pickFile(accept: string): Promise<File | null> {
+  return new Promise((resolve) => {
+    const input = document.createElement("input");
+    input.type = "file";
+    input.accept = accept;
+    input.onchange = () => resolve(input.files?.[0] ?? null);
+    input.oncancel = () => resolve(null);
+    input.click();
+  });
+}
+
 export function escapeCSV(v: unknown): string {
   if (v === null || v === undefined) return "";
   const s = String(v);
   return s.includes(",") || s.includes('"') || s.includes("\n")
     ? `"${s.replace(/"/g, '""')}"`
     : s;
+}
+
+/** Last component of a file path, with either separator (Windows uses `\`). */
+export function basename(path: string): string {
+  return path.split(/[\\/]/).filter(Boolean).pop() ?? path;
+}
+
+/** onWheel for a row that only scrolls sideways: a mouse wheel turns up and
+ * down, so its turn moves the row across. A sideways swipe scrolls it as is. */
+export function scrollSideways(e: React.WheelEvent<HTMLElement>) {
+  if (Math.abs(e.deltaY) > Math.abs(e.deltaX)) e.currentTarget.scrollLeft += e.deltaY;
 }

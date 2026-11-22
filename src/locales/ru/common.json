@@ -1,0 +1,26 @@
+{
+  "errorBoundary": {
+    "title": "Что-то пошло не так",
+    "unexpected": "Произошла непредвиденная ошибка.",
+    "tryAgain": "Повторить"
+  },
+  "errors": {
+    "unknown": "Неизвестная ошибка",
+    "queryCancelled": "Запрос отменен",
+    "restoreCancelled": "Восстановление отменено пользователем"
+  },
+  "fileTypes": {
+    "ext": "Файлы {{ext}}",
+    "sql": "Файлы SQL",
+    "all": "Все файлы"
+  },
+  "save": {
+    "saved": "Сохранено: {{name}}",
+    "failed": "Не удалось сохранить: {{name}}"
+  },
+  "native": {
+    "openDatabase": "Открыть базу данных Stoolap",
+    "ok": "ОК",
+    "cancel": "Отмена"
+  }
+}

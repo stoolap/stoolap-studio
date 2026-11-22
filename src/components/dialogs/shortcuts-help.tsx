@@ -1,6 +1,6 @@
-"use client";
 
 import { useState, useEffect } from "react";
+import { useTranslation } from "react-i18next";
 import {
   Dialog,
   DialogContent,
@@ -26,6 +26,7 @@ export function ShortcutsHelpDialog({
   open,
   onOpenChange,
 }: ShortcutsHelpDialogProps) {
+  const { t } = useTranslation("dialogs");
   const [mod, setMod] = useState("Ctrl");
 
   useEffect(() => {
@@ -34,24 +35,24 @@ export function ShortcutsHelpDialog({
   }, []);
 
   const shortcuts = [
-    { keys: [mod, "Enter"], desc: "Execute query" },
-    { keys: [mod, "E"], desc: "Explain query" },
-    { keys: [mod, "Shift", "F"], desc: "Format SQL" },
-    { keys: [mod, "T"], desc: "New tab" },
-    { keys: [mod, "W"], desc: "Close tab" },
-    { keys: ["Ctrl", "Tab"], desc: "Next tab" },
-    { keys: ["Ctrl", "Shift", "Tab"], desc: "Previous tab" },
-    { keys: [mod, "B"], desc: "Toggle sidebar" },
-    { keys: [mod, "F"], desc: "Search in results" },
-    { keys: [mod, "C"], desc: "Copy results" },
-    { keys: [mod, "?"], desc: "Show this help" },
+    { keys: [mod, "Enter"], desc: t("shortcuts.execute") },
+    { keys: [mod, "E"], desc: t("shortcuts.explain") },
+    { keys: [mod, "Shift", "F"], desc: t("shortcuts.format") },
+    { keys: [mod, "T"], desc: t("shortcuts.newTab") },
+    { keys: [mod, "W"], desc: t("shortcuts.closeTab") },
+    { keys: ["Ctrl", "Tab"], desc: t("shortcuts.nextTab") },
+    { keys: ["Ctrl", "Shift", "Tab"], desc: t("shortcuts.previousTab") },
+    { keys: [mod, "B"], desc: t("shortcuts.toggleSidebar") },
+    { keys: [mod, "F"], desc: t("shortcuts.search") },
+    { keys: [mod, "C"], desc: t("shortcuts.copy") },
+    { keys: [mod, "?"], desc: t("shortcuts.help") },
   ];
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-md">
+      <DialogContent className="sm:max-w-md" showCloseButton>
         <DialogHeader>
-          <DialogTitle>Keyboard Shortcuts</DialogTitle>
+          <DialogTitle>{t("shortcuts.title")}</DialogTitle>
         </DialogHeader>
         <div className="space-y-2 py-2">
           {shortcuts.map((s) => (
@@ -74,8 +75,7 @@ export function ShortcutsHelpDialog({
           ))}
         </div>
         <p className="text-xs text-muted-foreground">
-          Right-click cells to copy values. Double-click a table in the sidebar
-          to open the data browser.
+          {t("shortcuts.hint")}
         </p>
       </DialogContent>
     </Dialog>

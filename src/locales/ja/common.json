@@ -1,0 +1,26 @@
+{
+  "errorBoundary": {
+    "title": "問題が発生しました",
+    "unexpected": "予期しないエラーが発生しました。",
+    "tryAgain": "再試行"
+  },
+  "errors": {
+    "unknown": "不明なエラー",
+    "queryCancelled": "クエリがキャンセルされました",
+    "restoreCancelled": "復元はユーザーによってキャンセルされました"
+  },
+  "fileTypes": {
+    "ext": "{{ext}}ファイル",
+    "sql": "SQLファイル",
+    "all": "すべてのファイル"
+  },
+  "save": {
+    "saved": "{{name}}を保存しました",
+    "failed": "{{name}}を保存できませんでした"
+  },
+  "native": {
+    "openDatabase": "Stoolapデータベースを開く",
+    "ok": "OK",
+    "cancel": "キャンセル"
+  }
+}

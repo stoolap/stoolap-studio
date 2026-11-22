@@ -1,17 +1,25 @@
-"use client";
 
 import { useMemo, useState, useCallback, useRef, useEffect } from "react";
 import {
-  useReactTable,
-  getCoreRowModel,
-  getSortedRowModel,
-  getFilteredRowModel,
+  useTable,
+  tableFeatures,
+  rowSortingFeature,
+  columnFilteringFeature,
+  globalFilteringFeature,
+  columnSizingFeature,
+  columnResizingFeature,
+  createSortedRowModel,
+  createFilteredRowModel,
+  sortFn_alphanumeric,
+  sortFn_datetime,
+  sortFn_text,
   flexRender,
   type ColumnDef,
   type SortingState,
   type ColumnResizeMode,
 } from "@tanstack/react-table";
 import { useVirtualizer } from "@tanstack/react-virtual";
+import { useTranslation } from "react-i18next";
 import {
   ArrowUp,
   ArrowDown,
@@ -21,17 +29,10 @@ import {
   X,
   Link2,
   Waypoints,
-  Expand,
 } from "lucide-react";
-import {
-  ContextMenu,
-  ContextMenuContent,
-  ContextMenuItem,
-  ContextMenuSeparator,
-  ContextMenuTrigger,
-} from "@/components/ui/context-menu";
+import * as native from "@/lib/native";
 import { toast } from "sonner";
-import { cn } from "@/lib/utils";
+import { cn, errorMessage } from "@/lib/utils";
 import { useModKey } from "@/hooks/use-mod-key";
 import {
   isDistanceColumn,
@@ -40,6 +41,46 @@ import {
   formatVectorExpanded,
 } from "@/lib/vector-utils";
 import type { ForeignKeyInfo } from "@/lib/types";
+import { Tip } from "@/components/ui/tip";
+
+/**
+ * What the grid uses of the table: sorting (by column type, the "auto"
+ * sort picks among these), the search over every cell, and column widths
+ * the user drags. Filtering comes before the global search, sizing before
+ * resizing, as the features depend on each other.
+ */
+/**
+ * A column's starting width: its header's or its widest value's in the
+ * first rows, whichever is wider, measured in the grid's own fonts (the
+ * monospace one differs by system). Kept to 60–400px: a long text still
+ * opens in full on a click. The user's resizing overrides it.
+ */
+const SAMPLE_ROWS = 100;
+let measure: CanvasRenderingContext2D | null | undefined;
+function columnWidth(header: string, values: string[]): number {
+  measure ??= document.createElement("canvas").getContext("2d");
+  if (!measure) return 150;
+  // As .font-data and the header cell (.text-xs, medium) are set in globals.css
+  measure.font = `13px "SF Mono", SFMono-Regular, ui-monospace, Menlo, Monaco, Consolas, monospace`;
+  // Monospace: the longest value is the widest
+  const longest = values.reduce((a, b) => (b.length > a.length ? b : a), "");
+  const valueWidth = measure.measureText(longest).width + 24 + 2;
+  measure.font = `500 14px ${getComputedStyle(document.body).fontFamily}`;
+  // Its padding and room for the sort arrow
+  const headerWidth = measure.measureText(header).width + 24 + 20;
+  return Math.round(Math.min(400, Math.max(60, valueWidth, headerWidth)));
+}
+
+const features = tableFeatures({
+  rowSortingFeature,
+  columnFilteringFeature,
+  globalFilteringFeature,
+  columnSizingFeature,
+  columnResizingFeature,
+  sortedRowModel: createSortedRowModel(),
+  filteredRowModel: createFilteredRowModel(),
+  sortFns: { alphanumeric: sortFn_alphanumeric, datetime: sortFn_datetime, text: sortFn_text },
+});
 
 interface DataGridProps {
   columns: string[];
@@ -59,6 +100,7 @@ interface DataGridProps {
 }
 
 function VectorHeatmap({ values }: { values: number[] }) {
+  const { t } = useTranslation("editor");
   let min = Infinity,
     max = -Infinity;
   for (const v of values) {
@@ -69,10 +111,10 @@ function VectorHeatmap({ values }: { values: number[] }) {
 
   return (
     <div className="space-y-0.5">
-      <div className="flex items-center justify-between text-[10px] text-muted-foreground mb-2">
-        <span>{values.length} dimensions</span>
+      <div className="flex items-center justify-between text-xs text-muted-foreground mb-2">
+        <span>{t("grid.dimensions", { count: values.length })}</span>
         <span>
-          Range: [{min.toFixed(3)}, {max.toFixed(3)}]
+          {t("grid.range", { min: min.toFixed(3), max: max.toFixed(3) })}
         </span>
       </div>
       {values.map((val, i) => {
@@ -81,7 +123,7 @@ function VectorHeatmap({ values }: { values: number[] }) {
         const lightness = 100 - Math.abs(normalized) * 50;
         return (
           <div key={i} className="flex items-center gap-2 h-5">
-            <span className="text-[10px] text-muted-foreground tabular-nums w-6 text-right shrink-0">
+            <span className="text-xs text-muted-foreground tabular-nums w-6 text-right shrink-0">
               [{i}]
             </span>
             <div className="flex-1 h-4 rounded-sm border border-border/30 overflow-hidden relative">
@@ -94,7 +136,7 @@ function VectorHeatmap({ values }: { values: number[] }) {
                 style={{ width: `${Math.abs(normalized) * 100}%` }}
               />
             </div>
-            <span className="text-[10px] font-data tabular-nums w-16 text-right shrink-0">
+            <span className="text-xs font-data tabular-nums w-16 text-right shrink-0">
               {val.toFixed(4)}
             </span>
           </div>
@@ -116,6 +158,7 @@ export function DataGrid({
   serverSort,
   onServerSort,
 }: DataGridProps) {
+  const { t } = useTranslation("editor");
   const mod = useModKey();
   const [sorting, setSorting] = useState<SortingState>([]);
   const [globalFilter, setGlobalFilter] = useState("");
@@ -297,23 +340,48 @@ export function DataGrid({
     return map;
   }, [foreignKeys]);
 
+  // Number cells are right-aligned (FK cells render as links, left-aligned);
+  // align their headers the same way.
+  const rightAlignedCols = useMemo(
+    () =>
+      columns.map((col, i) => {
+        if (fkMap.has(col)) return false;
+        const sample = rows.find((r) => r[i] !== null)?.[i];
+        return typeof sample === "number";
+      }),
+    [columns, rows, fkMap],
+  );
+
   const handleCopyCellValue = useCallback((value: string) => {
     try {
       navigator.clipboard.writeText(value);
-      toast.success("Cell value copied");
+      toast.success(t("grid.cellCopied"));
     } catch {
-      toast.error("Failed to copy to clipboard");
+      toast.error(t("grid.copyFailed"));
     }
-  }, []);
+  }, [t]);
+
+  // Starting widths from the content. Not again for each page of the same
+  // columns (data tabs), which would make the columns jump.
+  const hasRows = rows.length > 0;
+  const columnKey = columns.join("\u0000");
+  const startWidths = useMemo(
+    () =>
+      columns.map((col, i) =>
+        columnWidth(col, rows.slice(0, SAMPLE_ROWS).map((row) => formatCellValue(row[i], i))),
+      ),
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- see above
+    [columnKey, hasRows, formatCellValue],
+  );
 
   // Stable column defs with resizing
-  const columnDefs = useMemo<ColumnDef<unknown[]>[]>(
+  const columnDefs = useMemo<ColumnDef<typeof features, unknown[]>[]>(
     () =>
       columns.map((col, i) => ({
         id: String(i),
         header: col,
         accessorFn: (row) => row[i],
-        size: 150,
+        size: startWidths[i] ?? 150,
         minSize: 60,
         maxSize: 600,
         cell: ({ getValue, row: tableRow }) => {
@@ -325,29 +393,30 @@ export function DataGrid({
 
           if (fk && value !== null && onNavigateToFK) {
             return (
-              <span
-                className="flex items-center gap-1 truncate font-data text-blue-500 hover:text-blue-600 hover:underline cursor-pointer"
-                data-row={tableRow.index}
-                data-col={i}
-                title={`Go to ${fk.referencedTable}.${fk.referencedColumn} = ${display}`}
-                onClick={() =>
-                  onNavigateToFK(fk.referencedTable, fk.referencedColumn, value)
-                }
-                onDoubleClick={(e) => {
-                  e.stopPropagation();
-                  if (onCellEdit) {
-                    setEditingCell({ row: tableRow.index, col: i });
-                    setEditValue(value === null ? "" : String(value));
+              <Tip label={t("grid.goTo", { table: fk.referencedTable, column: fk.referencedColumn, value: display })} delay={700}>
+                <span
+                  className="flex items-center gap-1 truncate font-data text-blue-500 hover:text-blue-600 hover:underline cursor-pointer"
+                  data-row={tableRow.index}
+                  data-col={i}
+                  onClick={() =>
+                    onNavigateToFK(fk.referencedTable, fk.referencedColumn, value)
                   }
-                }}
-                onContextMenu={(e) => {
-                  e.preventDefault();
-                  handleCopyCellValue(String(value));
-                }}
-              >
-                {display}
-                <Link2 className="h-2.5 w-2.5 shrink-0 opacity-50" />
-              </span>
+                  onDoubleClick={(e) => {
+                    e.stopPropagation();
+                    if (onCellEdit) {
+                      setEditingCell({ row: tableRow.index, col: i });
+                      setEditValue(value === null ? "" : String(value));
+                    }
+                  }}
+                  onContextMenu={(e) => {
+                    e.preventDefault();
+                    handleCopyCellValue(String(value));
+                  }}
+                >
+                  {display}
+                  <Link2 className="h-2.5 w-2.5 shrink-0 opacity-50" />
+                </span>
+              </Tip>
             );
           }
 
@@ -360,30 +429,31 @@ export function DataGrid({
                 : (value - distRange.min) / (distRange.max - distRange.min);
             const hue = 120 - pct * 120; // green(120) → red(0)
             return (
-              <span
-                className="flex items-center gap-1.5 font-data tabular-nums text-right"
-                data-row={tableRow.index}
-                data-col={i}
-                title={`Distance: ${value.toFixed(6)}`}
-                onContextMenu={(e) => {
-                  e.preventDefault();
-                  handleCopyCellValue(String(value));
-                }}
-              >
-                <span className="flex-1 text-right">{value.toFixed(4)}</span>
-                <div
-                  className="h-2.5 rounded-full shrink-0"
-                  style={{
-                    width: `${Math.max(4, (1 - pct) * 40)}px`,
-                    backgroundColor: `hsl(${hue}, 75%, 45%)`,
-                    opacity: 0.8,
+              <Tip label={t("grid.distance", { value: value.toFixed(6) })} delay={700}>
+                <span
+                  className="flex items-center gap-1.5 font-data tabular-nums text-right"
+                  data-row={tableRow.index}
+                  data-col={i}
+                  onContextMenu={(e) => {
+                    e.preventDefault();
+                    handleCopyCellValue(String(value));
                   }}
-                />
-              </span>
+                >
+                  <span className="flex-1 text-right">{value.toFixed(4)}</span>
+                  <div
+                    className="h-2.5 rounded-full shrink-0"
+                    style={{
+                      width: `${Math.max(4, (1 - pct) * 40)}px`,
+                      backgroundColor: `hsl(${hue}, 75%, 45%)`,
+                      opacity: 0.8,
+                    }}
+                  />
+                </span>
+              </Tip>
             );
           }
 
-          // Vector cells: context menu with Copy / Find Similar / Expand
+          // Vector cells: native context menu with Copy / Find Similar / Expand
           if (isVector) {
             const rawStr =
               value === null
@@ -393,123 +463,127 @@ export function DataGrid({
                     JSON.stringify(value))
                   : String(value);
             return (
-              <ContextMenu>
-                <ContextMenuTrigger asChild>
-                  <span
-                    className="block truncate cursor-default font-data text-purple-500/70"
-                    data-row={tableRow.index}
-                    data-col={i}
-                    title={display}
-                    onClick={() => {
-                      if (clickTimerRef.current)
-                        clearTimeout(clickTimerRef.current);
-                      clickTimerRef.current = setTimeout(() => {
-                        clickTimerRef.current = null;
-                        setExpandedCell({
-                          row: tableRow.index,
-                          col: i,
-                          value: rawStr,
-                        });
-                      }, 250);
-                    }}
-                    onDoubleClick={() => {
-                      if (clickTimerRef.current) {
-                        clearTimeout(clickTimerRef.current);
-                        clickTimerRef.current = null;
-                      }
-                    }}
-                  >
-                    {display}
-                  </span>
-                </ContextMenuTrigger>
-                <ContextMenuContent>
-                  <ContextMenuItem onClick={() => handleCopyCellValue(rawStr)}>
-                    <Copy className="h-3.5 w-3.5 mr-2" />
-                    Copy Value
-                  </ContextMenuItem>
-                  {onFindSimilar && value !== null && (
-                    <ContextMenuItem
-                      onClick={() => onFindSimilar(columns[i], rawStr)}
-                    >
-                      <Waypoints className="h-3.5 w-3.5 mr-2 text-purple-400" />
-                      Find Similar
-                    </ContextMenuItem>
-                  )}
-                  <ContextMenuSeparator />
-                  <ContextMenuItem
-                    onClick={() =>
+              <Tip label={display} delay={700}>
+                <span
+                  className="block truncate cursor-default font-data text-purple-500/70"
+                  data-row={tableRow.index}
+                  data-col={i}
+                  onClick={() => {
+                    if (clickTimerRef.current)
+                      clearTimeout(clickTimerRef.current);
+                    clickTimerRef.current = setTimeout(() => {
+                      clickTimerRef.current = null;
                       setExpandedCell({
                         row: tableRow.index,
                         col: i,
                         value: rawStr,
-                      })
+                      });
+                    }, 250);
+                  }}
+                  onDoubleClick={() => {
+                    if (clickTimerRef.current) {
+                      clearTimeout(clickTimerRef.current);
+                      clickTimerRef.current = null;
                     }
-                  >
-                    <Expand className="h-3.5 w-3.5 mr-2" />
-                    Expand
-                  </ContextMenuItem>
-                </ContextMenuContent>
-              </ContextMenu>
+                  }}
+                  onContextMenu={async (e) => {
+                    e.preventDefault();
+                    const menuItems: Array<{
+                      id: string;
+                      label: string;
+                      type?: "separator" | "normal";
+                    }> = [{ id: "copy", label: t("grid.copyValue") }];
+                    if (onFindSimilar && value !== null) {
+                      menuItems.push({
+                        id: "findSimilar",
+                        label: t("grid.findSimilar"),
+                      });
+                    }
+                    menuItems.push({
+                      id: "sep",
+                      label: "",
+                      type: "separator",
+                    });
+                    menuItems.push({ id: "expand", label: t("grid.expand") });
+
+                    const selected =
+                      await native.showContextMenu(menuItems);
+                    if (selected === "copy") handleCopyCellValue(rawStr);
+                    if (selected === "findSimilar")
+                      onFindSimilar?.(columns[i], rawStr);
+                    if (selected === "expand")
+                      setExpandedCell({
+                        row: tableRow.index,
+                        col: i,
+                        value: rawStr,
+                      });
+                  }}
+                >
+                  {display}
+                </span>
+              </Tip>
             );
           }
 
           return (
-            <span
-              className={cn(
-                "block truncate cursor-default font-data",
-                value === null && "text-muted-foreground/60 italic",
-                typeof value === "number" && "text-right",
-                typeof value === "boolean" && "text-center",
-                onCellEdit && "cursor-text",
-              )}
-              data-row={tableRow.index}
-              data-col={i}
-              title={isLong ? display : undefined}
-              onDoubleClick={() => {
-                if (clickTimerRef.current) {
-                  clearTimeout(clickTimerRef.current);
-                  clickTimerRef.current = null;
-                }
-                if (onCellEdit) {
-                  setEditingCell({ row: tableRow.index, col: i });
-                  setEditValue(value === null ? "" : String(value));
-                }
-              }}
-              onClick={() => {
-                if (isLong) {
-                  if (clickTimerRef.current)
+            <Tip label={isLong ? display : undefined} delay={700}>
+              <span
+                className={cn(
+                  "block truncate cursor-default font-data",
+                  value === null && "text-muted-foreground/60 italic",
+                  typeof value === "number" && "text-right",
+                  typeof value === "boolean" && "text-center",
+                  onCellEdit && "cursor-text",
+                )}
+                data-row={tableRow.index}
+                data-col={i}
+                onDoubleClick={() => {
+                  if (clickTimerRef.current) {
                     clearTimeout(clickTimerRef.current);
-                  clickTimerRef.current = setTimeout(() => {
                     clickTimerRef.current = null;
-                    const rawStr =
-                      value === null
-                        ? "NULL"
-                        : typeof value === "object"
-                          ? (objectToVectorString(
-                              value as Record<string, unknown>,
-                            ) ?? JSON.stringify(value))
-                          : String(value);
-                    setExpandedCell({
-                      row: tableRow.index,
-                      col: i,
-                      value: rawStr,
-                    });
-                  }, 250);
-                }
-              }}
-              onContextMenu={(e) => {
-                e.preventDefault();
-                handleCopyCellValue(value === null ? "" : String(value));
-              }}
-            >
-              {display}
-            </span>
+                  }
+                  if (onCellEdit) {
+                    setEditingCell({ row: tableRow.index, col: i });
+                    setEditValue(value === null ? "" : String(value));
+                  }
+                }}
+                onClick={() => {
+                  if (isLong) {
+                    if (clickTimerRef.current)
+                      clearTimeout(clickTimerRef.current);
+                    clickTimerRef.current = setTimeout(() => {
+                      clickTimerRef.current = null;
+                      const rawStr =
+                        value === null
+                          ? "NULL"
+                          : typeof value === "object"
+                            ? (objectToVectorString(
+                                value as Record<string, unknown>,
+                              ) ?? JSON.stringify(value))
+                            : String(value);
+                      setExpandedCell({
+                        row: tableRow.index,
+                        col: i,
+                        value: rawStr,
+                      });
+                    }, 250);
+                  }
+                }}
+                onContextMenu={(e) => {
+                  e.preventDefault();
+                  handleCopyCellValue(value === null ? "" : String(value));
+                }}
+              >
+                {display}
+              </span>
+            </Tip>
           );
         },
-        sortingFn: "auto",
+        sortFn: "auto",
       })),
     [
       columns,
+      startWidths,
       onCellEdit,
       onFindSimilar,
       formatCellValue,
@@ -518,6 +592,7 @@ export function DataGrid({
       onNavigateToFK,
       vectorColSet,
       distanceRanges,
+      t,
     ],
   );
 
@@ -540,16 +615,14 @@ export function DataGrid({
     [columns.length, formatCellValue],
   );
 
-  const table = useReactTable({
+  const table = useTable({
+    features,
     data: rows,
     columns: columnDefs,
     state: { sorting, globalFilter },
     onSortingChange: setSorting,
     onGlobalFilterChange: setGlobalFilter,
     globalFilterFn,
-    getCoreRowModel: getCoreRowModel(),
-    getSortedRowModel: getSortedRowModel(),
-    getFilteredRowModel: getFilteredRowModel(),
     columnResizeMode,
     enableColumnResizing: true,
   });
@@ -571,16 +644,16 @@ export function DataGrid({
       .join("\n");
     try {
       navigator.clipboard.writeText(`${header}\n${body}`);
-      toast.success(`Copied ${visibleRows.length} rows`);
+      toast.success(t("grid.rowsCopied", { count: visibleRows.length }));
     } catch {
-      toast.error("Failed to copy to clipboard");
+      toast.error(t("grid.copyFailed"));
     }
-  }, [columns, tableRows]);
+  }, [columns, tableRows, t]);
 
   if (columns.length === 0) {
     return (
       <div className="flex items-center justify-center h-full text-muted-foreground text-xs">
-        No columns to display
+        {t("grid.noColumns")}
       </div>
     );
   }
@@ -595,12 +668,12 @@ export function DataGrid({
     >
       {/* Search bar */}
       {searchOpen && (
-        <div className="flex items-center gap-2 px-3 py-1.5 border-b panel-toolbar shrink-0">
-          <Search className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+        <div className="flex items-center gap-2 px-2.5 py-1 border-b panel-toolbar shrink-0">
+          <Search className="h-3 w-3 text-muted-foreground shrink-0" />
           <input
             ref={searchInputRef}
             className="flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground/50"
-            placeholder="Search in results..."
+            placeholder={t("grid.searchPlaceholder")}
             value={globalFilter}
             onChange={(e) => setGlobalFilter(e.target.value)}
             onKeyDown={(e) => {
@@ -621,7 +694,7 @@ export function DataGrid({
               setSearchOpen(false);
               setGlobalFilter("");
             }}
-            aria-label="Close search"
+            aria-label={t("grid.closeSearch")}
           >
             <X className="h-3.5 w-3.5" />
           </button>
@@ -658,14 +731,14 @@ export function DataGrid({
                 {onDeleteRow && (
                   <th className="w-8 bg-muted/80 border-r border-border/50" />
                 )}
-                {hg.headers.map((header) => {
+                {hg.headers.map((header, colIndex) => {
                   const colName = String(header.column.columnDef.header);
                   const isServerSorted =
                     serverSort && serverSort.column === colName;
                   return (
                     <th
                       key={header.id}
-                      className="relative px-3 py-1.5 text-left font-medium text-foreground/80 border-r border-border/50 cursor-pointer select-none hover:bg-accent/50 whitespace-nowrap bg-muted/80"
+                      className="relative px-3 py-1.5 text-left font-medium text-foreground/80 border-r border-border/50 cursor-pointer select-none hover:bg-accent/50 whitespace-nowrap bg-muted/80 text-xs"
                       style={{ width: header.getSize() }}
                       onClick={
                         onServerSort
@@ -684,8 +757,13 @@ export function DataGrid({
                           : header.column.getToggleSortingHandler()
                       }
                     >
-                      <div className="flex items-center gap-1">
-                        <span className="text-sm truncate">
+                      <div
+                        className={cn(
+                          "flex items-center gap-1",
+                          rightAlignedCols[colIndex] && "flex-row-reverse",
+                        )}
+                      >
+                        <span className="truncate">
                           {flexRender(
                             header.column.columnDef.header,
                             header.getContext(),
@@ -769,18 +847,20 @@ export function DataGrid({
                       {/* Delete button */}
                       {onDeleteRow && (
                         <td className="w-8 text-center border-r border-border/20">
-                          <button
-                            className="opacity-0 group-hover/row:opacity-100 text-destructive/60 hover:text-destructive transition-opacity"
-                            onClick={() => onDeleteRow(row.index)}
-                            title="Delete row"
-                            aria-label="Delete row"
-                          >
-                            <Trash2 className="h-3.5 w-3.5 mx-auto" />
-                          </button>
+                          <Tip label={t("grid.deleteRow")}>
+                            <button
+                              className="opacity-0 group-hover/row:opacity-100 text-destructive/60 hover:text-destructive transition-opacity"
+                              onClick={() => onDeleteRow(row.index)}
+                              aria-label={t("grid.deleteRow")}
+                            >
+                              <Trash2 className="h-3.5 w-3.5 mx-auto" />
+                            </button>
+                          </Tip>
                         </td>
                       )}
                       {/* Data cells */}
-                      {row.getVisibleCells().map((cell) => (
+                      {/* Every cell: the grid never hides a column */}
+                      {row.getAllCells().map((cell) => (
                         <td
                           key={cell.id}
                           className="px-3 py-1 border-r border-border/20 overflow-hidden"
@@ -836,29 +916,31 @@ export function DataGrid({
       <div className="flex items-center gap-3 px-3 py-1 border-t panel-toolbar text-xs text-muted-foreground shrink-0">
         <span className="tabular-nums">
           {globalFilter
-            ? `${tableRows.length} of ${rows.length} row${rows.length !== 1 ? "s" : ""}`
-            : `${rows.length} row${rows.length !== 1 ? "s" : ""}`}
+            ? t("grid.filteredRows", { shown: tableRows.length, count: rows.length })
+            : t("grid.rows", { count: rows.length })}
         </span>
         <div className="flex-1" />
-        <button
-          className="flex items-center gap-1 hover:text-foreground transition-colors"
-          onClick={() => {
-            setSearchOpen(true);
-            requestAnimationFrame(() => searchInputRef.current?.focus());
-          }}
-          title={`Search (${mod}+F)`}
-        >
-          <Search className="h-3 w-3" />
-          Search
-        </button>
-        <button
-          className="flex items-center gap-1 hover:text-foreground transition-colors"
-          onClick={handleCopy}
-          title={`Copy${globalFilter ? " visible" : ""} rows as TSV (${mod}+C)`}
-        >
-          <Copy className="h-3 w-3" />
-          Copy
-        </button>
+        <Tip label={t("grid.searchTitle", { mod })}>
+          <button
+            className="flex items-center gap-1 hover:text-foreground transition-colors"
+            onClick={() => {
+              setSearchOpen(true);
+              requestAnimationFrame(() => searchInputRef.current?.focus());
+            }}
+          >
+            <Search className="h-3 w-3" />
+            {t("grid.search")}
+          </button>
+        </Tip>
+        <Tip label={t(globalFilter ? "grid.copyVisibleRowsTitle" : "grid.copyRowsTitle", { mod })}>
+          <button
+            className="flex items-center gap-1 hover:text-foreground transition-colors"
+            onClick={handleCopy}
+          >
+            <Copy className="h-3 w-3" />
+            {t("grid.copy")}
+          </button>
+        </Tip>
       </div>
 
       {/* Expanded cell overlay */}
@@ -871,7 +953,7 @@ export function DataGrid({
               className="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
               role="dialog"
               aria-modal="true"
-              aria-label={`Expanded cell: ${columns[expandedCell.col]}`}
+              aria-label={t("grid.expandedCell", { column: columns[expandedCell.col] })}
               onClick={() => setExpandedCell(null)}
               onKeyDown={(e) => {
                 if (e.key === "Escape") setExpandedCell(null);
@@ -911,7 +993,7 @@ export function DataGrid({
                         }}
                       >
                         <Waypoints className="h-3 w-3" />
-                        Find Similar
+                        {t("grid.findSimilar")}
                       </button>
                     )}
                     <button
@@ -919,7 +1001,7 @@ export function DataGrid({
                       onClick={() => handleCopyCellValue(expandedCell.value)}
                     >
                       <Copy className="h-3 w-3" />
-                      Copy
+                      {t("grid.copy")}
                     </button>
                   </div>
                 </div>
@@ -935,7 +1017,7 @@ export function DataGrid({
                       )}
                       onClick={() => setHeatmapView(true)}
                     >
-                      Heatmap
+                      {t("grid.heatmap")}
                     </button>
                     <button
                       className={cn(
@@ -946,7 +1028,7 @@ export function DataGrid({
                       )}
                       onClick={() => setHeatmapView(false)}
                     >
-                      Text
+                      {t("grid.text")}
                     </button>
                   </div>
                 )}

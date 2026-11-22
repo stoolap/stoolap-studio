@@ -126,10 +126,16 @@ const NEWLINE_BEFORE = new Set([
 
 const INDENT_AFTER = new Set(["SELECT", "FROM", "WHERE", "SET", "VALUES"]);
 
+/**
+ * Stoolap's operators longer than one character (its lexer's list), longest
+ * first; #> and #>> are left out, as its lexer reads # as a comment
+ */
+const OPERATORS = ["->>", "<=>", "->", "!=", "<>", "<=", ">=", "<<", ">>", "||", "?&", "?|", "@>", "<@", "::"];
+
 export function formatSQL(sql: string): string {
   // Tokenize preserving strings, identifiers, and whitespace
   const tokens: {
-    type: "word" | "string" | "symbol" | "space";
+    type: "word" | "string" | "lineComment" | "symbol" | "space";
     value: string;
   }[] = [];
   let i = 0;
@@ -142,11 +148,11 @@ export function formatSQL(sql: string): string {
       tokens.push({ type: "space", value: ws });
       continue;
     }
-    // Line comment
-    if (sql[i] === "-" && sql[i + 1] === "-") {
+    // Line comment (-- or #, as Stoolap reads them)
+    if ((sql[i] === "-" && sql[i + 1] === "-") || sql[i] === "#") {
       let c = "";
       while (i < sql.length && sql[i] !== "\n") c += sql[i++];
-      tokens.push({ type: "string", value: c });
+      tokens.push({ type: "lineComment", value: c });
       continue;
     }
     // Block comment
@@ -165,7 +171,11 @@ export function formatSQL(sql: string): string {
     if (sql[i] === "'") {
       let s = sql[i++];
       while (i < sql.length) {
-        if (sql[i] === "'" && sql[i + 1] === "'") {
+        if (sql[i] === "\\") {
+          // A backslash escapes the next character, a quote too
+          s += sql.slice(i, i + 2);
+          i += 2;
+        } else if (sql[i] === "'" && sql[i + 1] === "'") {
           s += "''";
           i += 2;
         } else if (sql[i] === "'") {
@@ -178,14 +188,15 @@ export function formatSQL(sql: string): string {
       tokens.push({ type: "string", value: s });
       continue;
     }
-    // Double-quoted identifier
-    if (sql[i] === '"') {
+    // Quoted name: "..." or `...`
+    if (sql[i] === '"' || sql[i] === "`") {
+      const q = sql[i];
       let s = sql[i++];
       while (i < sql.length) {
-        if (sql[i] === '"' && sql[i + 1] === '"') {
-          s += '""';
+        if (sql[i] === q && sql[i + 1] === q) {
+          s += q + q;
           i += 2;
-        } else if (sql[i] === '"') {
+        } else if (sql[i] === q) {
           s += sql[i++];
           break;
         } else {
@@ -232,12 +243,25 @@ export function formatSQL(sql: string): string {
       tokens.push({ type: "word", value: n });
       continue;
     }
+    // Operators of two or three characters stay whole (>= is not > =)
+    const op = OPERATORS.find((o) => sql.startsWith(o, i));
+    if (op) {
+      tokens.push({ type: "symbol", value: op });
+      i += op.length;
+      continue;
+    }
     // Symbols (operators, parentheses, etc.)
     tokens.push({ type: "symbol", value: sql[i++] });
   }
 
   // Format
   let result = "";
+  /** Start a new line at the current indent; never leaves a blank line */
+  const breakLine = () => {
+    result = result.replace(/[ \t]+$/, "");
+    if (result.length > 0 && !result.endsWith("\n")) result += "\n";
+    result += "  ".repeat(indent);
+  };
   let indent = 0;
   let prevKeyword = "";
 
@@ -286,7 +310,8 @@ export function formatSQL(sql: string): string {
             if (INDENT_AFTER.has(prevKeyword)) {
               indent = Math.max(0, indent - 1);
             }
-            result += "\n" + "  ".repeat(indent) + upper + " " + "JOIN";
+            breakLine();
+            result += upper + " " + "JOIN";
             prevKeyword = "JOIN";
             t = peek; // skip to JOIN token
             continue;
@@ -300,7 +325,8 @@ export function formatSQL(sql: string): string {
         }
         // AND/OR in WHERE get newline + indent
         if (upper === "AND" || upper === "OR") {
-          result += "\n" + "  ".repeat(indent) + upper;
+          breakLine();
+          result += upper;
           prevKeyword = upper;
           continue;
         }
@@ -308,7 +334,8 @@ export function formatSQL(sql: string): string {
         if (INDENT_AFTER.has(prevKeyword)) {
           indent = Math.max(0, indent - 1);
         }
-        result += "\n" + "  ".repeat(indent) + upper;
+        breakLine();
+        result += upper;
         if (INDENT_AFTER.has(upper)) {
           indent++;
         }
@@ -317,7 +344,7 @@ export function formatSQL(sql: string): string {
       }
 
       result +=
-        (result.length > 0 && !/[(\n]$/.test(result.trimEnd()) ? " " : "") +
+        (result.length > 0 && !/[(\s]$/.test(result) ? " " : "") +
         (isKeyword ? upper : token.value);
       if (isKeyword) prevKeyword = upper;
       continue;
@@ -325,8 +352,15 @@ export function formatSQL(sql: string): string {
 
     if (token.type === "string") {
       result +=
-        (result.length > 0 && !/[(\n]$/.test(result.trimEnd()) ? " " : "") +
+        (result.length > 0 && !/[(\s]$/.test(result) ? " " : "") +
         token.value;
+      continue;
+    }
+
+    if (token.type === "lineComment") {
+      // It runs to the end of the line, so whatever follows goes on the next
+      result += (result.length > 0 && !/[(\s]$/.test(result) ? " " : "") + token.value;
+      breakLine();
       continue;
     }
 
@@ -338,7 +372,7 @@ export function formatSQL(sql: string): string {
       } else if (token.value === ")") {
         result += ")";
       } else if (token.value === ";") {
-        result += ";\n";
+        result = result.replace(/[ \t]+$/, "") + ";\n\n";
         indent = 0;
         prevKeyword = "";
       } else {

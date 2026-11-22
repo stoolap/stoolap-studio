@@ -1,0 +1,26 @@
+{
+  "errorBoundary": {
+    "title": "Щось пішло не так",
+    "unexpected": "Сталася неочікувана помилка.",
+    "tryAgain": "Спробувати знову"
+  },
+  "errors": {
+    "unknown": "Невідома помилка",
+    "queryCancelled": "Запит скасовано",
+    "restoreCancelled": "Відновлення скасовано користувачем"
+  },
+  "fileTypes": {
+    "ext": "Файли {{ext}}",
+    "sql": "Файли SQL",
+    "all": "Усі файли"
+  },
+  "save": {
+    "saved": "Збережено: {{name}}",
+    "failed": "Не вдалося зберегти {{name}}"
+  },
+  "native": {
+    "openDatabase": "Відкрити базу даних Stoolap",
+    "ok": "OK",
+    "cancel": "Скасувати"
+  }
+}

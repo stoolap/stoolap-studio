@@ -1,0 +1,26 @@
+{
+  "errorBoundary": {
+    "title": "Bir şeyler ters gitti",
+    "unexpected": "Beklenmeyen bir hata oluştu.",
+    "tryAgain": "Yeniden Dene"
+  },
+  "errors": {
+    "unknown": "Bilinmeyen hata",
+    "queryCancelled": "Sorgu iptal edildi",
+    "restoreCancelled": "Geri yükleme kullanıcı tarafından iptal edildi"
+  },
+  "fileTypes": {
+    "ext": "{{ext}} Dosyaları",
+    "sql": "SQL Dosyaları",
+    "all": "Tüm Dosyalar"
+  },
+  "save": {
+    "saved": "Kaydedildi: {{name}}",
+    "failed": "Kaydedilemedi: {{name}}"
+  },
+  "native": {
+    "openDatabase": "Stoolap Veritabanı Aç",
+    "ok": "Tamam",
+    "cancel": "İptal"
+  }
+}

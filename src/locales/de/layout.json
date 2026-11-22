@@ -1,0 +1,36 @@
+{
+  "appShell": {
+    "hideSidebar": "Seitenleiste ausblenden",
+    "showSidebar": "Seitenleiste einblenden"
+  },
+  "statusBar": {
+    "inMemory": "In-Memory",
+    "noConnection": "Keine Verbindung",
+    "inMemoryHint": "Nur im Arbeitsspeicher: Änderungen gehen verloren, wenn Sie die Datenbank oder die App schließen. Erstellen Sie ein Backup, um sie zu behalten.",
+    "transactionOpen": "Transaktion offen",
+    "transactionOpenHint": "Ihre Sitzung ist in einer Transaktion: Was Sie ausgeführt haben, ist nicht festgeschrieben, und andere Sitzungen sehen es nicht. Führen Sie COMMIT aus, um es zu behalten, oder ROLLBACK, um es rückgängig zu machen."
+  },
+  "dataTab": {
+    "unavailable": "Tabelle „{{table}}“ ist nicht mehr verfügbar: {{error}}",
+    "loading": "Tabellenschema wird geladen..."
+  },
+  "agentToggle": {
+    "title": "Agent",
+    "hide": "Agent ausblenden",
+    "show": "Agent einblenden"
+  },
+  "welcome": {
+    "openDatabase": "Datenbank öffnen…",
+    "newMemory": "Neue In-Memory-Datenbank",
+    "loadExample": "Beispieldatenbank laden",
+    "recent": "Zuletzt verwendet",
+    "opening": "Wird geöffnet…",
+    "openFailed": "{{name}} konnte nicht geöffnet werden"
+  },
+  "toolbar": {
+    "examplesTab": "Beispiele",
+    "loadExampleFailed": "Beispiel konnte nicht geladen werden",
+    "openFailed": "{{name}} konnte nicht geöffnet werden",
+    "createFailed": "Datenbank konnte nicht erstellt werden"
+  }
+}

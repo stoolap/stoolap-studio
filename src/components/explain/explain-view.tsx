@@ -1,6 +1,6 @@
-"use client";
 
 import { useState, useRef, useEffect } from "react";
+import { useTranslation } from "react-i18next";
 import { Copy, Check } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -10,6 +10,7 @@ interface ExplainViewProps {
 }
 
 export function ExplainView({ plan }: ExplainViewProps) {
+  const { t } = useTranslation("editor");
   const lines = plan.split("\n");
   const [copied, setCopied] = useState(false);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -37,7 +38,7 @@ export function ExplainView({ plan }: ExplainViewProps) {
         size="icon"
         className="absolute top-2 right-2 h-7 w-7 opacity-60 hover:opacity-100"
         onClick={handleCopy}
-        aria-label="Copy explain plan"
+        aria-label={t("explain.copy")}
       >
         {copied ? (
           <Check className="h-3.5 w-3.5 text-green-500" />

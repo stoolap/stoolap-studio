@@ -1,6 +1,7 @@
-"use client";
 
 import { useState } from "react";
+import { useTranslation } from "react-i18next";
+import { errorMessage } from "@/lib/utils";
 import {
   Dialog,
   DialogContent,
@@ -11,7 +12,6 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { errorMessage } from "@/lib/utils";
 import { useConnection } from "@/hooks/use-connection";
 import { useHistoryStore } from "@/stores/history-store";
 import { Database, FolderOpen, Zap, Clock, X, Trash2 } from "lucide-react";
@@ -27,6 +27,7 @@ interface ConnectDialogProps {
 }
 
 export function ConnectDialog({ open, onOpenChange }: ConnectDialogProps) {
+  const { t } = useTranslation("dialogs");
   const [mode, setMode] = useState<"memory" | "file">("file");
   const [name, setName] = useState("");
   const [path, setPath] = useState("");
@@ -83,12 +84,12 @@ export function ConnectDialog({ open, onOpenChange }: ConnectDialogProps) {
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <Database className="h-5 w-5" />
-            Open Database
+            {t("connect.title")}
           </DialogTitle>
         </DialogHeader>
 
         <form
-          className="space-y-4 py-2"
+          className="space-y-4 pt-2"
           onSubmit={(e) => {
             e.preventDefault();
             if (!loading && (mode === "memory" || path)) handleConnect();
@@ -102,7 +103,7 @@ export function ConnectDialog({ open, onOpenChange }: ConnectDialogProps) {
               className="flex-1"
             >
               <Zap className="h-4 w-4 mr-1" />
-              In-Memory
+              {t("connect.memory")}
             </Button>
             <Button
               variant={mode === "file" ? "default" : "outline"}
@@ -111,15 +112,15 @@ export function ConnectDialog({ open, onOpenChange }: ConnectDialogProps) {
               className="flex-1"
             >
               <FolderOpen className="h-4 w-4 mr-1" />
-              File-Based
+              {t("connect.file")}
             </Button>
           </div>
 
           <div className="space-y-2">
-            <Label htmlFor="conn-name">Connection Name (optional)</Label>
+            <Label htmlFor="conn-name">{t("connect.name")}</Label>
             <Input
               id="conn-name"
-              placeholder={mode === "memory" ? "My Scratch DB" : "My Database"}
+              placeholder={mode === "memory" ? t("connect.memoryPlaceholder") : t("connect.filePlaceholder")}
               value={name}
               onChange={(e) => setName(e.target.value)}
             />
@@ -127,16 +128,18 @@ export function ConnectDialog({ open, onOpenChange }: ConnectDialogProps) {
 
           {mode === "file" && (
             <div className="space-y-2">
-              <Label htmlFor="conn-path">Database Path</Label>
-              <Input
-                id="conn-path"
-                placeholder="./mydata or /absolute/path/to/db"
-                value={path}
-                onChange={(e) => setPath(e.target.value)}
-              />
+              <Label htmlFor="conn-path">{t("connect.path")}</Label>
+              <div className="flex gap-2">
+                <Input
+                  id="conn-path"
+                  placeholder={t("connect.pathPlaceholder")}
+                  value={path}
+                  onChange={(e) => setPath(e.target.value)}
+                  className="flex-1"
+                />
+              </div>
               <p className="text-xs text-muted-foreground">
-                Server-side path to the database directory. Will be created if it
-                does not exist.
+                {t("connect.pathHint")}
               </p>
             </div>
           )}
@@ -147,7 +150,7 @@ export function ConnectDialog({ open, onOpenChange }: ConnectDialogProps) {
               <div className="flex items-center justify-between">
                 <Label className="flex items-center gap-1.5 text-muted-foreground">
                   <Clock className="h-3.5 w-3.5" />
-                  Recent
+                  {t("connect.recent")}
                 </Label>
                 <Tooltip>
                   <TooltipTrigger asChild>
@@ -156,12 +159,12 @@ export function ConnectDialog({ open, onOpenChange }: ConnectDialogProps) {
                       size="icon"
                       className="h-6 w-6"
                       onClick={clearHistory}
-                      aria-label="Clear history"
+                      aria-label={t("connect.clearHistory")}
                     >
                       <Trash2 className="h-3 w-3 text-muted-foreground" />
                     </Button>
                   </TooltipTrigger>
-                  <TooltipContent>Clear history</TooltipContent>
+                  <TooltipContent>{t("connect.clearHistory")}</TooltipContent>
                 </Tooltip>
               </div>
               <div className="space-y-1 max-h-[140px] overflow-y-auto">
@@ -188,12 +191,12 @@ export function ConnectDialog({ open, onOpenChange }: ConnectDialogProps) {
                             e.stopPropagation();
                             removeRecent(entry.path);
                           }}
-                          aria-label="Remove from history"
+                          aria-label={t("connect.removeRecent")}
                         >
                           <X className="h-3 w-3" />
                         </Button>
                       </TooltipTrigger>
-                      <TooltipContent>Remove from history</TooltipContent>
+                      <TooltipContent>{t("connect.removeRecent")}</TooltipContent>
                     </Tooltip>
                   </div>
                 ))}
@@ -205,13 +208,13 @@ export function ConnectDialog({ open, onOpenChange }: ConnectDialogProps) {
 
           <DialogFooter>
             <Button variant="outline" onClick={() => onOpenChange(false)}>
-              Cancel
+              {t("actions.cancel")}
             </Button>
             <Button
               type="submit"
               disabled={loading || (mode === "file" && !path)}
             >
-              {loading ? "Connecting..." : "Connect"}
+              {loading ? t("connect.connecting") : t("connect.connect")}
             </Button>
           </DialogFooter>
         </form>

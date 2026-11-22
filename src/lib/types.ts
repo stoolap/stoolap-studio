@@ -3,7 +3,7 @@ export interface ConnectionMeta {
   name: string;
   path: string;
   type: "memory" | "file";
-  createdAt: number;
+  createdAt?: number;
 }
 
 export interface QueryResult {
@@ -32,6 +32,21 @@ export interface ErrorResult {
 
 export type ApiResult = QueryResult | ExecResult | DdlResult | ErrorResult;
 
+/** One statement's result in a script, with the statement */
+export type StatementResult = (QueryResult | ExecResult | DdlResult) & { sql: string };
+
+/** What a script of several statements returns */
+export interface ScriptResult {
+  results: StatementResult[];
+  time: number;
+  /** The statement that failed, after the ones in `results` ran, and those after it */
+  error?: string;
+  failed?: string;
+  notRun?: string[];
+  /** What ran before the failure was rolled back with it */
+  rolledBack?: boolean;
+}
+
 export interface ColumnInfo {
   field: string;
   type: string;
@@ -44,7 +59,10 @@ export interface ColumnInfo {
 export interface IndexInfo {
   tableName: string;
   indexName: string;
+  /** As SHOW INDEXES lists it: one name, or "(a, b)" for several */
   columnName: string;
+  /** The indexed columns, in order */
+  columns: string[];
   indexType: string;
   isUnique: boolean;
   options?: string;
@@ -79,5 +97,19 @@ export interface EditorTab {
   mode: "query" | "data";
   tableName?: string;
   lastExecutedSql?: string;
+  /** The database it last ran on (path, or id when in memory), and when (epoch ms) */
+  lastDb?: string;
+  /** That database's name then (it stays known once the database is closed) */
+  lastDbName?: string;
+  lastRunAt?: number;
   initialFilter?: { column: string; value: string };
+  /** Every statement's result when a script ran; `result` is the one shown */
+  results?: StatementResult[];
+  resultIndex?: number;
+  /** How long the user waited for the script (ms), request to parsed rows */
+  resultsTime?: number;
+  /** The statement the script failed on, after `results` ran */
+  resultsError?: string;
+  /** Not saved across launches (the example database's query tab) */
+  transient?: boolean;
 }

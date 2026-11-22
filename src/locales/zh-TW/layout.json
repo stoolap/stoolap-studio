@@ -1,0 +1,36 @@
+{
+  "appShell": {
+    "hideSidebar": "隱藏側邊欄",
+    "showSidebar": "顯示側邊欄"
+  },
+  "statusBar": {
+    "inMemory": "記憶體",
+    "noConnection": "未連線",
+    "inMemoryHint": "僅存在記憶體中：關閉資料庫或應用程式後變更會遺失。若要保留，請先備份。",
+    "transactionOpen": "交易進行中",
+    "transactionOpenHint": "目前工作階段位於交易中：執行的內容尚未認可，其他工作階段看不到。執行 COMMIT 保留變更，或執行 ROLLBACK 復原。"
+  },
+  "dataTab": {
+    "unavailable": "資料表「{{table}}」已無法使用：{{error}}",
+    "loading": "正在載入資料表結構..."
+  },
+  "agentToggle": {
+    "title": "代理程式",
+    "hide": "隱藏代理程式",
+    "show": "顯示代理程式"
+  },
+  "welcome": {
+    "openDatabase": "打開資料庫…",
+    "newMemory": "新增記憶體資料庫",
+    "loadExample": "載入範例資料庫",
+    "recent": "最近使用",
+    "opening": "正在打開…",
+    "openFailed": "無法打開 {{name}}"
+  },
+  "toolbar": {
+    "examplesTab": "範例",
+    "loadExampleFailed": "無法載入範例",
+    "openFailed": "無法打開 {{name}}",
+    "createFailed": "無法建立資料庫"
+  }
+}

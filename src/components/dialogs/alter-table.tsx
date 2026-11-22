@@ -1,6 +1,6 @@
-"use client";
 
-import { useState, useMemo, useEffect } from "react";
+import { useState, useMemo, useEffect, useCallback } from "react";
+import { Trans, useTranslation } from "react-i18next";
 import {
   Dialog,
   DialogContent,
@@ -11,27 +11,26 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Checkbox } from "@/components/ui/checkbox";
-import { Badge } from "@/components/ui/badge";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipTrigger,
-} from "@/components/ui/tooltip";
 import { Plus, Trash2, Undo2 } from "lucide-react";
 import { useConnectionStore } from "@/stores/connection-store";
-import { cn, quoteId, errorMessage } from "@/lib/utils";
+import { useTableIndexes } from "@/hooks/use-schema";
+import { cn, errorMessage, quoteId } from "@/lib/utils";
 import { formatDefaultValue } from "@/lib/sql-utils";
-import { DATA_TYPES, VECTOR_DIM_PRESETS } from "@/lib/constants";
+import { DATA_TYPES } from "@/lib/constants";
 import * as api from "@/lib/api-client";
 import type { ColumnInfo } from "@/lib/types";
+import { Tip } from "@/components/ui/tip";
+import {
+  CellInput,
+  ColumnList,
+  Flag,
+  RowDetail,
+  SqlPreview,
+  TypeSelect,
+  VectorSize,
+} from "./column-grid";
+
+const COLS = "grid grid-cols-[minmax(0,1fr)_112px_124px_120px_60px] items-center gap-x-2";
 
 const TYPE_ALIASES: Record<string, string> = {
   INT: "INTEGER",
@@ -62,15 +61,60 @@ function extractDimensions(type: string): string {
   return match ? match[1] : "";
 }
 
+/** Whether the column's type, size or NOT NULL differ from the table's:
+ *  what MODIFY COLUMN changes */
+function isRetyped(
+  c: { type: string; dimensions: string; nullable: boolean },
+  orig: ColumnInfo,
+): boolean {
+  return (
+    c.type !== normalizeType(orig.type) ||
+    c.dimensions !== extractDimensions(orig.type) ||
+    c.nullable !== orig.nullable
+  );
+}
+
+/** The column's DEFAULT as DESCRIBE gives it; NULL (left by DROP DEFAULT)
+ *  is none */
+function defaultOf(orig: ColumnInfo): string {
+  return orig.defaultValue === "NULL" ? "" : orig.defaultValue;
+}
+
+/** The column's CHECK condition, which DESCRIBE ends its Extra with:
+ *  "auto_increment, CHECK (id > 0)" */
+function checkOf(orig: ColumnInfo): string {
+  return orig.extra.match(/CHECK \((.*)\)$/)?.[1] ?? "";
+}
+
+/** The CHECK condition the row asks for (empty for none) */
+function checkWanted(c: { hasCheck: boolean; check: string }): string {
+  return c.hasCheck ? c.check.trim() : "";
+}
+
+/** Whether the column differs from the table's, its name aside */
+function isModified(c: ColumnState, orig: ColumnInfo): boolean {
+  return (
+    isRetyped(c, orig) ||
+    c.unique !== (orig.key === "UNI") ||
+    c.defaultValue.trim() !== defaultOf(orig) ||
+    checkWanted(c) !== checkOf(orig)
+  );
+}
+
 interface ColumnState {
   originalName: string;
   name: string;
   type: string;
   dimensions: string;
   nullable: boolean;
+  /** UNIQUE: kept as a unique index of its own */
+  unique: boolean;
   key: string;
-  /** DEFAULT for an added column (empty for none) */
-  defaultValue?: string;
+  /** DEFAULT (empty for none) */
+  defaultValue: string;
+  hasCheck: boolean;
+  /** The CHECK's condition, without its parentheses */
+  check: string;
   status: "existing" | "renamed" | "modified" | "added" | "dropped";
 }
 
@@ -89,16 +133,21 @@ export function AlterTableDialog({
   columns: originalColumns,
   onAltered,
 }: AlterTableDialogProps) {
+  const { t } = useTranslation("dialogs");
   const activeId = useConnectionStore((s) => s.activeId);
   const [tableName, setTableName] = useState(table);
   const [cols, setCols] = useState<ColumnState[]>(() =>
     initCols(originalColumns),
   );
-  const [newColName, setNewColName] = useState("");
-  const [newColType, setNewColType] = useState("TEXT");
-  const [newColDimensions, setNewColDimensions] = useState("");
-  const [newColNullable, setNewColNullable] = useState(true);
-  const [newColDefault, setNewColDefault] = useState("");
+  const [nextId, setNextId] = useState("");
+  const { data: indexes } = useTableIndexes(open ? table : null);
+  // The unique index of one column alone, which UQ turns off
+  const uniqueIndex = useCallback(
+    (column: string) =>
+      indexes?.find((ix) => ix.isUnique && ix.columns.length === 1 && ix.columns[0] === column)
+        ?.indexName,
+    [indexes],
+  );
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
@@ -107,37 +156,33 @@ export function AlterTableDialog({
     if (open) {
       setTableName(table);
       setCols(initCols(originalColumns));
-      setNewColName("");
-      setNewColType("TEXT");
-      setNewColDimensions("");
-      setNewColNullable(true);
-      setNewColDefault("");
+      setNextId("");
       setError("");
     }
   }, [open, table, originalColumns]);
 
-  // Add new column
-  const handleAddColumn = () => {
-    if (!newColName.trim()) return;
+  // Add a new column: a row of its own at the end, filled in there
+  const addColumn = () =>
     setCols([
       ...cols,
       {
         originalName: "",
-        name: newColName.trim(),
-        type: newColType,
-        dimensions: newColType === "VECTOR" ? newColDimensions : "",
-        nullable: newColNullable,
+        name: "",
+        type: "TEXT",
+        dimensions: "",
+        nullable: true,
+        unique: false,
         key: "",
-        defaultValue: newColDefault,
+        defaultValue: "",
+        hasCheck: false,
+        check: "",
         status: "added",
       },
     ]);
-    setNewColName("");
-    setNewColType("TEXT");
-    setNewColDimensions("");
-    setNewColNullable(true);
-    setNewColDefault("");
-  };
+
+  // Change an added column's NOT NULL, UNIQUE, DEFAULT or CHECK
+  const editAdded = (i: number, updates: Partial<ColumnState>) =>
+    setCols(cols.map((c, idx) => (idx === i ? { ...c, ...updates } : c)));
 
   // Mark column for drop
   const toggleDrop = (i: number) => {
@@ -146,9 +191,15 @@ export function AlterTableDialog({
         if (idx !== i) return c;
         if (c.status === "added") return c; // use remove for added
         if (c.status === "dropped") {
-          // Undo drop — restore original status
-          const changed = c.name !== c.originalName;
-          return { ...c, status: changed ? "renamed" : "existing" };
+          // Undo drop — back to the edits made before it
+          const orig = originalColumns.find((oc) => oc.field === c.originalName);
+          const status =
+            c.name !== c.originalName
+              ? "renamed"
+              : orig && isModified(c, orig)
+                ? "modified"
+                : "existing";
+          return { ...c, status };
         }
         return { ...c, status: "dropped" };
       }),
@@ -160,54 +211,23 @@ export function AlterTableDialog({
     setCols(cols.filter((_, idx) => idx !== i));
   };
 
-  // Rename column
-  const renameCol = (i: number, newName: string) => {
+  // Change an existing column's name, type, size, constraints or DEFAULT. It counts as
+  // renamed or modified by how it differs from the column as it is now.
+  const editCol = (i: number, updates: Partial<ColumnState>) => {
     setCols(
       cols.map((c, idx) => {
         if (idx !== i) return c;
-        if (c.status === "added") return { ...c, name: newName };
-        const isRenamed = newName !== c.originalName;
-        const origInfo = originalColumns.find(
-          (oc) => oc.field === c.originalName,
-        );
-        const origType = origInfo ? normalizeType(origInfo.type) : c.type;
-        const origDims = origInfo
-          ? extractDimensions(origInfo.type)
-          : c.dimensions;
-        const isTypeChanged = c.type !== origType || c.dimensions !== origDims;
+        const next = { ...c, ...updates };
+        if (next.type !== "VECTOR") next.dimensions = "";
+        if (c.status === "added") return next;
+        const orig = originalColumns.find((oc) => oc.field === c.originalName);
         const status =
-          !isRenamed && !isTypeChanged
-            ? "existing"
-            : isRenamed
-              ? "renamed"
-              : "modified";
-        return { ...c, name: newName, status };
-      }),
-    );
-  };
-
-  // Change type (modify)
-  const changeType = (i: number, newType: string) => {
-    setCols(
-      cols.map((c, idx) => {
-        if (idx !== i) return c;
-        const dims = newType !== "VECTOR" ? "" : c.dimensions;
-        if (c.status === "added")
-          return { ...c, type: newType, dimensions: dims };
-        const isRenamed = c.name !== c.originalName;
-        const status = isRenamed ? "renamed" : "modified";
-        return { ...c, type: newType, dimensions: dims, status };
-      }),
-    );
-  };
-
-  // Change dimensions (for VECTOR type)
-  const changeDimensions = (i: number, dims: string) => {
-    setCols(
-      cols.map((c, idx) => {
-        if (idx !== i) return c;
-        if (c.status === "added") return { ...c, dimensions: dims };
-        return { ...c, dimensions: dims, status: "modified" };
+          next.name !== c.originalName
+            ? "renamed"
+            : orig && isModified(next, orig)
+              ? "modified"
+              : "existing";
+        return { ...next, status };
       }),
     );
   };
@@ -218,21 +238,7 @@ export function AlterTableDialog({
       (oc) => oc.field === cols[i].originalName,
     );
     if (!orig) return;
-    setCols(
-      cols.map((c, idx) =>
-        idx === i
-          ? {
-              originalName: orig.field,
-              name: orig.field,
-              type: normalizeType(orig.type),
-              dimensions: extractDimensions(orig.type),
-              nullable: orig.nullable,
-              key: orig.key,
-              status: "existing",
-            }
-          : c,
-      ),
-    );
+    setCols(cols.map((c, idx) => (idx === i ? initCols([orig])[0] : c)));
   };
 
   // Generate SQL statements for all changes
@@ -247,6 +253,9 @@ export function AlterTableDialog({
     }
 
     const tbl = quoteId(tableName !== table ? tableName : table);
+    // Named as Stoolap names a column's UNIQUE
+    const createUnique = (name: string) =>
+      `CREATE UNIQUE INDEX ${quoteId(`unique_${tableName}_${name}`)} ON ${tbl} (${quoteId(name)})`;
 
     for (const c of cols) {
       const typeStr =
@@ -256,38 +265,53 @@ export function AlterTableDialog({
       if (c.status === "dropped") {
         stmts.push(`ALTER TABLE ${tbl} DROP COLUMN ${quoteId(c.originalName)}`);
       } else if (c.status === "added") {
+        if (!c.name.trim()) continue; // not named yet
         let sql = `ALTER TABLE ${tbl} ADD COLUMN ${quoteId(c.name)} ${typeStr}`;
-        // NOT NULL goes first: Stoolap reads "DEFAULT 0 NOT NULL" as one expression.
         if (!c.nullable) sql += " NOT NULL";
         // Stoolap refuses NOT NULL without a non-NULL DEFAULT on a table with rows
-        if (c.defaultValue?.trim())
-          sql += ` DEFAULT ${formatDefaultValue(c.defaultValue)}`;
+        if (c.defaultValue.trim()) sql += ` DEFAULT ${formatDefaultValue(c.defaultValue)}`;
+        if (checkWanted(c)) sql += ` CHECK (${checkWanted(c)})`;
         stmts.push(sql);
-      } else if (c.status === "renamed") {
-        // Emit RENAME first
-        stmts.push(
-          `ALTER TABLE ${tbl} RENAME COLUMN ${quoteId(c.originalName)} TO ${quoteId(c.name)}`,
-        );
-        // If type also changed, emit MODIFY with the new name
-        const origInfo = originalColumns.find(
-          (oc) => oc.field === c.originalName,
-        );
-        const origType = origInfo ? normalizeType(origInfo.type) : "";
-        const origDims = origInfo ? extractDimensions(origInfo.type) : "";
-        if (c.type !== origType || c.dimensions !== origDims) {
+        // ADD COLUMN takes no UNIQUE: an index of its own after it
+        if (c.unique) stmts.push(createUnique(c.name));
+      } else if (c.status === "renamed" || c.status === "modified") {
+        if (c.status === "renamed") {
           stmts.push(
-            `ALTER TABLE ${tbl} MODIFY COLUMN ${quoteId(c.name)} ${typeStr}`,
+            `ALTER TABLE ${tbl} RENAME COLUMN ${quoteId(c.originalName)} TO ${quoteId(c.name)}`,
           );
         }
-      } else if (c.status === "modified") {
-        stmts.push(
-          `ALTER TABLE ${tbl} MODIFY COLUMN ${quoteId(c.name)} ${typeStr}`,
-        );
+        const orig = originalColumns.find((oc) => oc.field === c.originalName);
+        if (!orig) continue;
+        const col = `ALTER TABLE ${tbl} ALTER COLUMN ${quoteId(c.name)}`;
+        const dflt = c.defaultValue.trim();
+        const newDefault = dflt !== defaultOf(orig) ? dflt : "";
+        const check = checkWanted(c);
+        const newCheck = check !== checkOf(orig) ? check : "";
+        // Removed ones first: a change of type judges the CHECKs still there
+        if (!dflt && defaultOf(orig)) stmts.push(`${col} DROP DEFAULT`);
+        if (!check && checkOf(orig)) stmts.push(`${col} DROP CHECK`);
+        if (isRetyped(c, orig) || newDefault || newCheck) {
+          // MODIFY sets the type and NOT NULL, and the DEFAULT and CHECK it
+          // names; the ones it leaves out stay, but NOT NULL left out is dropped
+          let sql = `ALTER TABLE ${tbl} MODIFY COLUMN ${quoteId(c.name)} ${typeStr}`;
+          if (!c.nullable) sql += " NOT NULL";
+          if (newDefault) sql += ` DEFAULT ${formatDefaultValue(newDefault)}`;
+          if (newCheck) sql += ` CHECK (${newCheck})`;
+          stmts.push(sql);
+        }
+        if (c.unique !== (orig.key === "UNI")) {
+          const index = uniqueIndex(c.originalName);
+          if (c.unique) stmts.push(createUnique(c.name));
+          else if (index) stmts.push(`DROP INDEX ${quoteId(index)} ON ${tbl}`);
+        }
       }
     }
 
+    // Lower than an id in use, Stoolap leaves it as it is
+    if (nextId) stmts.push(`ALTER TABLE ${tbl} AUTO_INCREMENT = ${nextId}`);
+
     return stmts;
-  }, [cols, tableName, table, originalColumns]);
+  }, [cols, tableName, table, originalColumns, nextId, uniqueIndex]);
 
   const hasChanges = statements.length > 0;
 
@@ -297,7 +321,7 @@ export function AlterTableDialog({
     setError("");
     try {
       for (const sql of statements) {
-        await api.executeQuery(activeId, sql);
+        await api.runSql(activeId, sql);
       }
       onAltered();
       onOpenChange(false);
@@ -309,330 +333,266 @@ export function AlterTableDialog({
   };
 
   const isTableRenamed = tableName !== table;
+  const autoIncrement = (name: string) =>
+    !!originalColumns.find((oc) => oc.field === name)?.extra.toLowerCase().includes("auto_increment");
+  const hasAutoIncrement = originalColumns.some((oc) => autoIncrement(oc.field));
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-3xl max-h-[85vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>
-            Edit Table: <span className="font-data font-normal">{table}</span>
+            <Trans
+              t={t}
+              i18nKey="alterTable.title"
+              values={{ table }}
+              components={{ b: <span className="font-data font-normal" /> }}
+            />
           </DialogTitle>
         </DialogHeader>
 
-        <div className="space-y-5 py-2">
+        <div className="space-y-4">
           {/* Table name */}
           <div className="flex items-center gap-3">
-            <Label className="shrink-0">Table Name</Label>
+            <Label htmlFor="alter-table-name" className="shrink-0">
+              {t("createTable.name")}
+            </Label>
             <Input
+              id="alter-table-name"
               value={tableName}
               onChange={(e) => setTableName(e.target.value)}
               className="max-w-xs font-data"
             />
             {isTableRenamed && (
-              <Badge
-                variant="outline"
-                className="text-blue-500 border-blue-500/50"
-              >
-                Renamed
-              </Badge>
+              <span className="text-xs text-blue-500">{t("alterTable.renamed")}</span>
+            )}
+            {hasAutoIncrement && (
+              <>
+                <Label htmlFor="alter-table-next-id" className="ml-auto shrink-0">
+                  {t("alterTable.nextId")}
+                </Label>
+                <Tip label={t("alterTable.nextIdHint")}>
+                  <Input
+                    id="alter-table-next-id"
+                    inputMode="numeric"
+                    value={nextId}
+                    onChange={(e) => setNextId(e.target.value.replace(/\D/g, ""))}
+                    className="w-24 font-data"
+                  />
+                </Tip>
+              </>
             )}
           </div>
 
-          {/* Existing columns */}
           <div className="space-y-2">
-            <Label>Columns</Label>
-
-            {/* Header */}
-            <div className="grid grid-cols-[1fr_130px_60px_50px_50px_80px] gap-x-2 px-3 text-[11px] font-medium text-muted-foreground uppercase tracking-wider">
-              <span>Name</span>
-              <span>Type</span>
-              <span>Dims</span>
-              <span className="text-center">PK</span>
-              <span className="text-center">NULL</span>
-              <span className="text-right">Actions</span>
-            </div>
-
-            {/* Rows */}
-            <div className="space-y-1">
+            <ColumnList
+              header={
+                <div className={`${COLS} px-1.5 py-1.5`}>
+                  <span className="px-2">{t("table.colName")}</span>
+                  <span className="px-2">{t("table.colType")}</span>
+                  <span className="px-1">{t("table.constraints")}</span>
+                  <span className="px-2">{t("table.colDefault")}</span>
+                  <span />
+                </div>
+              }
+            >
               {cols.map((col, i) => {
                 const isDropped = col.status === "dropped";
                 const isAdded = col.status === "added";
-                const isChanged =
-                  col.status === "renamed" || col.status === "modified";
+                const isChanged = col.status === "renamed" || col.status === "modified";
                 const isPK = col.key === "PRI";
+                const locked = isPK && !isAdded;
 
                 return (
                   <div
-                    key={`${col.originalName || col.name}-${i}`}
+                    key={col.originalName || `new-${i}`}
                     className={cn(
-                      "grid grid-cols-[1fr_130px_60px_50px_50px_80px] gap-x-2 items-center px-3 py-1.5 rounded border transition-colors",
-                      isDropped &&
-                        "bg-destructive/5 border-destructive/30 opacity-60",
-                      isAdded && "bg-green-500/5 border-green-500/30",
-                      isChanged &&
-                        !isDropped &&
-                        "bg-blue-500/5 border-blue-500/30",
-                      !isDropped && !isAdded && !isChanged && "bg-muted/20",
+                      "group",
+                      isAdded && "bg-green-500/[0.06]",
+                      isChanged && "bg-blue-500/[0.06]",
+                      isDropped && "bg-destructive/[0.05]",
                     )}
                   >
-                    {/* Name - editable */}
-                    <div className="flex items-center gap-2">
+                    <div className={`${COLS} px-1.5 py-1`}>
+                      {/* Name */}
                       {isDropped ? (
-                        <span className="text-sm font-data line-through text-muted-foreground">
+                        <span className="truncate px-2 font-data text-sm text-muted-foreground line-through">
                           {col.originalName}
                         </span>
                       ) : (
-                        <Input
-                          value={col.name}
-                          onChange={(e) => renameCol(i, e.target.value)}
-                          className="h-8 text-sm font-data"
-                          disabled={isPK && !isAdded}
+                        <div className="flex min-w-0 items-center gap-1">
+                          <CellInput
+                            aria-label={t("table.colName")}
+                            placeholder={isAdded ? "column_name" : undefined}
+                            value={col.name}
+                            onChange={(e) => editCol(i, { name: e.target.value })}
+                            disabled={locked}
+                            autoFocus={isAdded && !col.name}
+                          />
+                          {col.status === "renamed" && (
+                            <Tip label={t("alterTable.renamedFrom", { name: col.originalName })}>
+                              <span className="shrink-0 truncate font-data text-xs text-blue-500">
+                                {t("alterTable.was", { name: col.originalName })}
+                              </span>
+                            </Tip>
+                          )}
+                        </div>
+                      )}
+
+                      {/* Type */}
+                      {isDropped ? (
+                        <span className="px-2 font-data text-xs text-muted-foreground line-through">
+                          {col.type}
+                        </span>
+                      ) : (
+                        <TypeSelect value={col.type} onChange={(type) => editCol(i, { type })} disabled={locked} />
+                      )}
+
+                      {/* Constraints: PK and AI as the table has them */}
+                      <div className={cn("flex items-center gap-1", isDropped && "opacity-50")}>
+                        <Flag label="PK" name={t("table.primaryKey")} on={isPK} />
+                        {isPK || isDropped ? null : (
+                          <Flag
+                            label="NN"
+                            name={t("table.notNull")}
+                            on={!col.nullable}
+                            onChange={(v) => (isAdded ? editAdded : editCol)(i, { nullable: !v })}
+                          />
+                        )}
+                        {isPK || isDropped ? (
+                          <Flag label="UQ" name={t("table.unique")} on={col.unique && !isPK} />
+                        ) : (
+                          <Flag
+                            label="UQ"
+                            name={t("table.unique")}
+                            on={col.unique}
+                            onChange={(v) => (isAdded ? editAdded : editCol)(i, { unique: v })}
+                            // A UNIQUE over several columns can't be turned off here
+                            disabled={!isAdded && col.key === "UNI" && !uniqueIndex(col.originalName)}
+                          />
+                        )}
+                        <Flag label="AI" name={t("table.autoIncrement")} on={autoIncrement(col.originalName)} />
+                        {isDropped ? (
+                          <Flag label="CK" name={t("table.check")} on={col.hasCheck} />
+                        ) : (
+                          <Flag
+                            label="CK"
+                            name={t("table.check")}
+                            on={col.hasCheck}
+                            onChange={(v) => (isAdded ? editAdded : editCol)(i, { hasCheck: v })}
+                          />
+                        )}
+                      </div>
+
+                      {/* Default */}
+                      {isAdded ? (
+                        <Tip label={t("alterTable.defaultHint")}>
+                          <CellInput
+                            aria-label={t("table.colDefault")}
+                            placeholder={t("table.defaultPlaceholder")}
+                            value={col.defaultValue}
+                            onChange={(e) => editAdded(i, { defaultValue: e.target.value })}
+                          />
+                        </Tip>
+                      ) : isDropped ? (
+                        <span className="truncate px-2 font-data text-xs text-muted-foreground line-through">
+                          {col.defaultValue}
+                        </span>
+                      ) : (
+                        <CellInput
+                          aria-label={t("table.colDefault")}
+                          placeholder={locked ? undefined : t("table.defaultPlaceholder")}
+                          value={col.defaultValue}
+                          onChange={(e) => editCol(i, { defaultValue: e.target.value })}
+                          disabled={locked}
                         />
                       )}
-                      {col.status === "renamed" && (
-                        <Tooltip>
-                          <TooltipTrigger>
-                            <Badge
-                              variant="outline"
-                              className="text-[10px] px-1 py-0 text-blue-500 border-blue-500/50 shrink-0"
-                            >
-                              was: {col.originalName}
-                            </Badge>
-                          </TooltipTrigger>
-                          <TooltipContent>
-                            Renamed from {col.originalName}
-                          </TooltipContent>
-                        </Tooltip>
-                      )}
-                    </div>
 
-                    {/* Type - dropdown */}
-                    {isDropped ? (
-                      <span className="text-sm font-data text-muted-foreground line-through">
-                        {col.type}
-                      </span>
-                    ) : (
-                      <Select
-                        value={col.type}
-                        onValueChange={(v) => changeType(i, v)}
-                        disabled={isPK && !isAdded}
-                      >
-                        <SelectTrigger className="h-8 text-sm">
-                          <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {DATA_TYPES.map((t) => (
-                            <SelectItem key={t} value={t}>
-                              {t}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                    )}
-
-                    {/* Dimensions (for VECTOR type) */}
-                    {isDropped ? (
-                      <span className="text-sm font-data text-muted-foreground line-through">
-                        {col.dimensions}
-                      </span>
-                    ) : (
-                      <Input
-                        placeholder={col.type === "VECTOR" ? "dims" : ""}
-                        value={col.dimensions}
-                        onChange={(e) =>
-                          changeDimensions(i, e.target.value.replace(/\D/g, ""))
-                        }
-                        className="h-8 text-sm font-data"
-                        disabled={col.type !== "VECTOR" || (isPK && !isAdded)}
-                      />
-                    )}
-
-                    {/* PK indicator */}
-                    <div className="flex justify-center">
-                      {isPK && (
-                        <Badge
-                          variant="secondary"
-                          className="text-[10px] px-1.5 py-0"
-                        >
-                          PK
-                        </Badge>
-                      )}
-                    </div>
-
-                    {/* Nullable */}
-                    <div className="flex justify-center">
-                      <Checkbox
-                        checked={col.nullable}
-                        disabled={isDropped || isPK}
-                        onCheckedChange={(v) =>
-                          setCols(
-                            cols.map((c, idx) =>
-                              idx === i ? { ...c, nullable: !!v } : c,
-                            ),
-                          )
-                        }
-                      />
-                    </div>
-
-                    {/* Actions */}
-                    <div className="flex justify-end gap-1">
-                      {isChanged && !isDropped && (
-                        <Tooltip>
-                          <TooltipTrigger asChild>
+                      {/* Actions */}
+                      <div className="flex justify-end gap-0.5">
+                        {isChanged && (
+                          <Tip label={t("alterTable.undo")}>
                             <Button
                               variant="ghost"
                               size="icon"
-                              className="h-7 w-7"
+                              aria-label={t("alterTable.undo")}
+                              className="h-7 w-7 text-muted-foreground hover:text-foreground"
                               onClick={() => undoCol(i)}
                             >
                               <Undo2 className="h-3.5 w-3.5" />
                             </Button>
-                          </TooltipTrigger>
-                          <TooltipContent>Undo changes</TooltipContent>
-                        </Tooltip>
-                      )}
-                      {isAdded ? (
-                        <Tooltip>
-                          <TooltipTrigger asChild>
+                          </Tip>
+                        )}
+                        {isAdded ? (
+                          <Tip label={t("alterTable.remove")}>
                             <Button
                               variant="ghost"
                               size="icon"
-                              className="h-7 w-7 text-muted-foreground hover:text-destructive"
+                              aria-label={t("alterTable.remove")}
+                              className="h-7 w-7 text-muted-foreground opacity-0 group-hover:opacity-100 focus-visible:opacity-100 hover:text-destructive"
                               onClick={() => removeAdded(i)}
                             >
                               <Trash2 className="h-3.5 w-3.5" />
                             </Button>
-                          </TooltipTrigger>
-                          <TooltipContent>Remove</TooltipContent>
-                        </Tooltip>
-                      ) : !isPK ? (
-                        <Tooltip>
-                          <TooltipTrigger asChild>
+                          </Tip>
+                        ) : !isPK ? (
+                          <Tip label={isDropped ? t("alterTable.undoDrop") : t("alterTable.drop")}>
                             <Button
                               variant="ghost"
                               size="icon"
+                              aria-label={isDropped ? t("alterTable.undoDrop") : t("alterTable.drop")}
                               className={cn(
-                                "h-7 w-7",
+                                "h-7 w-7 text-muted-foreground",
                                 isDropped
-                                  ? "text-muted-foreground hover:text-foreground"
-                                  : "text-muted-foreground hover:text-destructive",
+                                  ? "hover:text-foreground"
+                                  : "opacity-0 group-hover:opacity-100 focus-visible:opacity-100 hover:text-destructive",
                               )}
                               onClick={() => toggleDrop(i)}
                             >
-                              {isDropped ? (
-                                <Undo2 className="h-3.5 w-3.5" />
-                              ) : (
-                                <Trash2 className="h-3.5 w-3.5" />
-                              )}
+                              {isDropped ? <Undo2 className="h-3.5 w-3.5" /> : <Trash2 className="h-3.5 w-3.5" />}
                             </Button>
-                          </TooltipTrigger>
-                          <TooltipContent>
-                            {isDropped ? "Undo drop" : "Drop column"}
-                          </TooltipContent>
-                        </Tooltip>
-                      ) : null}
+                          </Tip>
+                        ) : null}
+                      </div>
                     </div>
+                    {col.type === "VECTOR" && !isDropped && (
+                      <VectorSize
+                        label={t("table.colDims")}
+                        placeholder={t("table.dimsPlaceholder")}
+                        value={col.dimensions}
+                        onChange={(dimensions) => editCol(i, { dimensions })}
+                        disabled={locked}
+                      />
+                    )}
+                    {col.hasCheck && !isDropped && (
+                      <RowDetail>
+                        <span className="font-data text-muted-foreground">CHECK (</span>
+                        <Input
+                          aria-label={t("table.check")}
+                          placeholder={`${col.name || "value"} > 0`}
+                          value={col.check}
+                          onChange={(e) => (isAdded ? editAdded : editCol)(i, { check: e.target.value })}
+                          className="h-7 w-64 font-data text-xs md:text-xs"
+                        />
+                        <span className="font-data text-muted-foreground">)</span>
+                      </RowDetail>
+                    )}
                   </div>
                 );
               })}
-            </div>
+            </ColumnList>
+
+            <Button variant="ghost" size="sm" className="-ml-2 text-muted-foreground" onClick={addColumn}>
+              <Plus className="h-3.5 w-3.5" />
+              {t("table.addColumn")}
+            </Button>
           </div>
 
-          {/* Add new column */}
-          <div className="space-y-2">
-            <Label className="text-sm text-muted-foreground">
-              Add New Column
-            </Label>
-            <div className="flex items-center gap-2">
-              <Input
-                placeholder="column_name"
-                value={newColName}
-                onChange={(e) => setNewColName(e.target.value)}
-                className="flex-1 h-9 font-data"
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") handleAddColumn();
-                }}
-              />
-              <Select
-                value={newColType}
-                onValueChange={(v) => {
-                  setNewColType(v);
-                  if (v !== "VECTOR") setNewColDimensions("");
-                }}
-              >
-                <SelectTrigger className="w-[130px] h-9">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {DATA_TYPES.map((t) => (
-                    <SelectItem key={t} value={t}>
-                      {t}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              {newColType === "VECTOR" && (
-                <>
-                  <Input
-                    placeholder="dims"
-                    value={newColDimensions}
-                    onChange={(e) =>
-                      setNewColDimensions(e.target.value.replace(/\D/g, ""))
-                    }
-                    className="w-[70px] h-9 font-data"
-                  />
-                  <div className="flex items-center gap-1">
-                    {VECTOR_DIM_PRESETS.slice(0, 4).map((d) => (
-                      <Badge
-                        key={d}
-                        variant="outline"
-                        className="text-[10px] px-1.5 py-0 cursor-pointer hover:bg-purple-500/10 hover:border-purple-500/50"
-                        onClick={() => setNewColDimensions(String(d))}
-                      >
-                        {d}
-                      </Badge>
-                    ))}
-                  </div>
-                </>
-              )}
-              <Input
-                placeholder="default"
-                value={newColDefault}
-                onChange={(e) => setNewColDefault(e.target.value)}
-                className="w-[100px] h-9 font-data"
-                title="Required for a NOT NULL column when the table has rows"
-              />
-              <label className="flex items-center gap-1.5 text-sm whitespace-nowrap">
-                <Checkbox
-                  checked={newColNullable}
-                  onCheckedChange={(v) => setNewColNullable(!!v)}
-                />
-                Nullable
-              </label>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={handleAddColumn}
-                disabled={!newColName.trim()}
-                className="shrink-0"
-              >
-                <Plus className="h-3.5 w-3.5 mr-1" />
-                Add
-              </Button>
-            </div>
-          </div>
-
-          {/* SQL preview */}
           {hasChanges && (
-            <div className="space-y-1">
-              <Label className="text-xs text-muted-foreground">
-                {statements.length} change{statements.length !== 1 ? "s" : ""}{" "}
-                to apply
-              </Label>
-              <pre className="text-xs p-3 rounded bg-muted font-mono whitespace-pre-wrap border">
-                {statements.join(";\n")};
-              </pre>
-            </div>
+            <SqlPreview
+              label={t("alterTable.pending", { count: statements.length })}
+              sql={`${statements.join(";\n")};`}
+            />
           )}
 
           {error && <p className="text-sm text-destructive">{error}</p>}
@@ -640,12 +600,12 @@ export function AlterTableDialog({
 
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)}>
-            Cancel
+            {t("actions.cancel")}
           </Button>
           <Button onClick={handleApply} disabled={loading || !hasChanges}>
             {loading
-              ? "Applying..."
-              : `Apply ${statements.length} Change${statements.length !== 1 ? "s" : ""}`}
+              ? t("alterTable.applying")
+              : t("alterTable.apply", { count: statements.length })}
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -660,7 +620,11 @@ function initCols(columns: ColumnInfo[]): ColumnState[] {
     type: normalizeType(c.type),
     dimensions: extractDimensions(c.type),
     nullable: c.nullable,
+    unique: c.key === "UNI",
     key: c.key,
+    defaultValue: defaultOf(c),
+    hasCheck: !!checkOf(c),
+    check: checkOf(c),
     status: "existing" as const,
   }));
 }

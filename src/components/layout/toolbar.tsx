@@ -1,42 +1,16 @@
-"use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
+import { useTranslation } from "react-i18next";
+import { errorMessage } from "@/lib/utils";
 import { useConnection } from "@/hooks/use-connection";
 import { useEditorStore } from "@/stores/editor-store";
 import { useQueryClient } from "@tanstack/react-query";
-import { Button } from "@/components/ui/button";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import { ConnectDialog } from "@/components/dialogs/connect-dialog";
 import { ShortcutsHelpDialog } from "@/components/dialogs/shortcuts-help";
 import { BackupDialog } from "@/components/dialogs/backup-dialog";
 import { RestoreDialog } from "@/components/dialogs/restore-dialog";
-import { ThemeSelector } from "@/components/common/theme-selector";
-import { StoolapLogo } from "@/components/common/stoolap-logo";
-import { ConfirmDialog } from "@/components/dialogs/confirm-dialog";
-import {
-  Plus,
-  FlaskConical,
-  Loader2,
-  Database,
-  Unplug,
-  Keyboard,
-  Download,
-  Upload,
-} from "lucide-react";
-import { Badge } from "@/components/ui/badge";
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipTrigger,
-} from "@/components/ui/tooltip";
+import { AboutDialog } from "@/components/dialogs/about-dialog";
 import { toast } from "sonner";
-import { errorMessage } from "@/lib/utils";
 import * as api from "@/lib/api-client";
 import { splitStatements } from "@/lib/sql-utils";
 
@@ -155,53 +129,56 @@ CREATE INDEX idx_kb_embedding ON knowledge_base(embedding) USING HNSW WITH (metr
 CREATE INDEX idx_kb_category ON knowledge_base(category);
 CREATE INDEX idx_kb_author ON knowledge_base(author);`;
 
+/**
+ * Headless: no UI of its own. It holds the dialogs, and answers the app
+ * menu, keyboard shortcuts and the welcome screen.
+ */
 export function Toolbar() {
+  const { t } = useTranslation("layout");
   const [connectOpen, setConnectOpen] = useState(false);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const [backupOpen, setBackupOpen] = useState(false);
   const [restoreOpen, setRestoreOpen] = useState(false);
-  const [loadingExample, setLoadingExample] = useState(false);
-  const [disconnectConfirm, setDisconnectConfirm] = useState(false);
-  const { connections, activeId, setActiveId, disconnect, connect } =
-    useConnection();
+  const [aboutOpen, setAboutOpen] = useState(false);
+  const { connections, activeId, setActiveId, connect } = useConnection();
   const addTab = useEditorStore((s) => s.addTab);
   const setActiveTab = useEditorStore((s) => s.setActiveTab);
   const queryClient = useQueryClient();
 
-  const activeConn = connections.find((c) => c.id === activeId);
-
-  // Listen for keyboard shortcut to open shortcuts help
+  // Listen for in-app requests: the app menu, the shortcuts help key and
+  // the welcome screen's actions
   useEffect(() => {
-    const handler = () => setShortcutsOpen(true);
-    window.addEventListener("stoolap:shortcuts-help", handler);
-    return () => window.removeEventListener("stoolap:shortcuts-help", handler);
+    const handlers: Array<[string, () => void]> = [
+      ["stoolap:shortcuts-help", () => setShortcutsOpen(true)],
+      ["stoolap:open-database", () => setConnectOpen(true)],
+      ["stoolap:new-memory-db", () => newMemoryRef.current()],
+      ["stoolap:load-example", () => loadExampleRef.current()],
+      ["stoolap:backup", () => setBackupOpen(true)],
+      ["stoolap:restore", () => setRestoreOpen(true)],
+      ["stoolap:about", () => setAboutOpen(true)],
+    ];
+    for (const [name, h] of handlers) window.addEventListener(name, h);
+    return () => {
+      for (const [name, h] of handlers) window.removeEventListener(name, h);
+    };
   }, []);
 
   const handleLoadExample = async () => {
-    // If an Example DB already exists, just switch to it
     const existing = connections.find((c) => c.name === "Example DB");
     if (existing) {
       setActiveId(existing.id);
       return;
     }
 
-    setLoadingExample(true);
     try {
-      // Open a new in-memory database
       const meta = await connect(":memory:", "Example DB");
-
-      // Execute all the DDL/DML statements one by one
       const statements = splitStatements(EXAMPLE_SQL);
-
       for (const stmt of statements) {
-        await api.executeQuery(meta.id, stmt);
+        await api.runSql(meta.id, stmt);
       }
-
-      // Refresh schema (scoped to the new connection)
       queryClient.invalidateQueries({ queryKey: ["tables", meta.id] });
       queryClient.invalidateQueries({ queryKey: ["views", meta.id] });
 
-      // Open a tab with a sample query
       const sampleQuery = `-- Try these queries:
 
 -- All orders with customer and product names
@@ -243,198 +220,47 @@ SELECT title, content,
 FROM knowledge_base
 WHERE category = 'Developer'
 ORDER BY distance
-LIMIT 5;
+LIMIT 5;`;
 
--- Metric comparison: cosine vs L2 distance side by side
-SELECT title,
-       VEC_DISTANCE_COSINE(embedding, '[0.41, 0.37, 0.36, 0.40, 0.06, 0.08, 0.03, 0.05, 0.03, 0.04, 0.02, 0.04, 0.11, 0.12, 0.08, 0.10]') AS cosine_dist,
-       VEC_DISTANCE_L2(embedding, '[0.41, 0.37, 0.36, 0.40, 0.06, 0.08, 0.03, 0.05, 0.03, 0.04, 0.02, 0.04, 0.11, 0.12, 0.08, 0.10]') AS l2_dist
-FROM knowledge_base
-ORDER BY cosine_dist
-LIMIT 5;
-
--- Vector utilities: inspect embedding dimensions and norms
-SELECT title, category, VEC_DIMS(embedding) AS dims, VEC_NORM(embedding) AS norm
-FROM knowledge_base
-ORDER BY norm DESC;
-
--- Self-join: find the closest pairs of articles
-SELECT a.title AS article_1, b.title AS article_2,
-       VEC_DISTANCE_COSINE(a.embedding, b.embedding) AS distance
-FROM knowledge_base a
-CROSS JOIN knowledge_base b
-WHERE a.id < b.id
-ORDER BY distance
-LIMIT 10;`;
-
-      const tabId = addTab("Examples", sampleQuery);
-      setActiveTab(tabId);
-      toast.success("Example database loaded");
+      // One Examples tab, not saved across launches (the example database
+      // itself is closed at every start)
+      const editor = useEditorStore.getState();
+      const existing = editor.tabs.find((tab) => tab.transient && tab.title === t("toolbar.examplesTab"));
+      if (existing) {
+        editor.updateTabSql(existing.id, sampleQuery);
+        setActiveTab(existing.id);
+      } else {
+        setActiveTab(addTab(t("toolbar.examplesTab"), sampleQuery, { transient: true }));
+      }
     } catch (e) {
-      toast.error("Failed to load example", {
+      toast.error(t("toolbar.loadExampleFailed"), {
         description: errorMessage(e),
       });
-    } finally {
-      setLoadingExample(false);
     }
   };
 
+  const handleNewMemory = async () => {
+    try {
+      await connect(":memory:");
+    } catch (e) {
+      toast.error(t("toolbar.createFailed"), { description: errorMessage(e) });
+    }
+  };
+
+  // The listeners are registered once; read the latest handlers (and the
+  // connections list they close over) through refs.
+  const loadExampleRef = useRef(handleLoadExample);
+  loadExampleRef.current = handleLoadExample;
+  const newMemoryRef = useRef(handleNewMemory);
+  newMemoryRef.current = handleNewMemory;
+
   return (
     <>
-      <div className="flex items-center gap-2 px-3 h-11 border-b bg-background shrink-0">
-        <StoolapLogo height={28} />
-
-        <div className="toolbar-separator" />
-
-        {/* Connection selector */}
-        {connections.length > 0 ? (
-          <Select value={activeId ?? ""} onValueChange={setActiveId}>
-            <SelectTrigger className="w-[200px] h-8 text-sm">
-              <div className="flex items-center gap-2">
-                <Database className="h-4 w-4 text-primary shrink-0" />
-                <SelectValue placeholder="Select connection" />
-              </div>
-            </SelectTrigger>
-            <SelectContent>
-              {connections.map((conn) => (
-                <SelectItem key={conn.id} value={conn.id}>
-                  <div className="flex items-center gap-2">
-                    <span>{conn.name}</span>
-                    <Badge
-                      variant="outline"
-                      className="text-[10px] px-1 py-0 leading-tight"
-                    >
-                      {conn.type}
-                    </Badge>
-                  </div>
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        ) : (
-          <span className="text-sm text-muted-foreground">No connections</span>
-        )}
-
-        {activeConn && (
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button
-                variant="ghost"
-                size="icon"
-                className="h-8 w-8"
-                onClick={() => setDisconnectConfirm(true)}
-                aria-label="Disconnect"
-              >
-                <Unplug className="h-4 w-4 text-muted-foreground hover:text-destructive" />
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent side="bottom">Disconnect</TooltipContent>
-          </Tooltip>
-        )}
-
-        <div className="toolbar-separator" />
-
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={() => setConnectOpen(true)}
-          className="gap-1.5"
-        >
-          <Plus className="h-3.5 w-3.5" />
-          Open DB
-        </Button>
-
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={handleLoadExample}
-          disabled={loadingExample}
-          className="gap-1.5"
-        >
-          {loadingExample ? (
-            <Loader2 className="h-3.5 w-3.5 animate-spin" />
-          ) : (
-            <FlaskConical className="h-3.5 w-3.5" />
-          )}
-          Example
-        </Button>
-
-        <div className="toolbar-separator" />
-
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => setBackupOpen(true)}
-              disabled={!activeConn}
-              className="gap-1.5"
-            >
-              <Download className="h-3.5 w-3.5" />
-              Backup
-            </Button>
-          </TooltipTrigger>
-          <TooltipContent side="bottom">
-            Export database as SQL dump
-          </TooltipContent>
-        </Tooltip>
-
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => setRestoreOpen(true)}
-              disabled={!activeConn}
-              className="gap-1.5"
-            >
-              <Upload className="h-3.5 w-3.5" />
-              Restore
-            </Button>
-          </TooltipTrigger>
-          <TooltipContent side="bottom">Import SQL dump file</TooltipContent>
-        </Tooltip>
-
-        <div className="flex-1" />
-
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Button
-              variant="ghost"
-              size="icon"
-              className="h-8 w-8"
-              onClick={() => setShortcutsOpen(true)}
-              aria-label="Keyboard shortcuts"
-            >
-              <Keyboard className="h-4 w-4 text-muted-foreground" />
-            </Button>
-          </TooltipTrigger>
-          <TooltipContent side="bottom">Keyboard shortcuts</TooltipContent>
-        </Tooltip>
-        <ThemeSelector />
-      </div>
-
-      {activeConn && (
-        <ConfirmDialog
-          open={disconnectConfirm}
-          onOpenChange={setDisconnectConfirm}
-          title="Disconnect"
-          description={`Disconnect from "${activeConn.name}"? Unsaved queries and in-memory data will be lost.`}
-          confirmLabel="Disconnect"
-          destructive
-          onConfirm={() => {
-            disconnect(activeConn.id);
-            setDisconnectConfirm(false);
-          }}
-        />
-      )}
       <ConnectDialog open={connectOpen} onOpenChange={setConnectOpen} />
-      <ShortcutsHelpDialog
-        open={shortcutsOpen}
-        onOpenChange={setShortcutsOpen}
-      />
+      <ShortcutsHelpDialog open={shortcutsOpen} onOpenChange={setShortcutsOpen} />
       <BackupDialog open={backupOpen} onOpenChange={setBackupOpen} />
       <RestoreDialog open={restoreOpen} onOpenChange={setRestoreOpen} />
+      <AboutDialog open={aboutOpen} onOpenChange={setAboutOpen} />
     </>
   );
 }

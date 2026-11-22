@@ -1,0 +1,26 @@
+{
+  "errorBoundary": {
+    "title": "Er is iets misgegaan",
+    "unexpected": "Er is een onverwachte fout opgetreden.",
+    "tryAgain": "Opnieuw proberen"
+  },
+  "errors": {
+    "unknown": "Onbekende fout",
+    "queryCancelled": "Query geannuleerd",
+    "restoreCancelled": "Herstel geannuleerd door gebruiker"
+  },
+  "fileTypes": {
+    "ext": "{{ext}}-bestanden",
+    "sql": "SQL-bestanden",
+    "all": "Alle bestanden"
+  },
+  "save": {
+    "saved": "{{name}} opgeslagen",
+    "failed": "Kan {{name}} niet opslaan"
+  },
+  "native": {
+    "openDatabase": "Stoolap-database openen",
+    "ok": "OK",
+    "cancel": "Annuleren"
+  }
+}

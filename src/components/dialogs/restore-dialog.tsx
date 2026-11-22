@@ -1,6 +1,7 @@
-"use client";
 
 import { useState, useRef, useCallback } from "react";
+import { Trans, useTranslation } from "react-i18next";
+import { errorMessage, pickFile } from "@/lib/utils";
 import {
   Dialog,
   DialogContent,
@@ -13,11 +14,11 @@ import { Label } from "@/components/ui/label";
 import { Checkbox } from "@/components/ui/checkbox";
 import { useConnectionStore } from "@/stores/connection-store";
 import { useQueryClient } from "@tanstack/react-query";
-import { Loader2, Upload, FileUp } from "lucide-react";
+import { Loader2, FileInput, FileUp } from "lucide-react";
 import { toast } from "sonner";
-import { errorMessage } from "@/lib/utils";
 import * as api from "@/lib/api-client";
 import { splitStatements } from "@/lib/sql-utils";
+import { restoreStatements } from "@/lib/restore";
 
 interface RestoreDialogProps {
   open: boolean;
@@ -25,12 +26,11 @@ interface RestoreDialogProps {
 }
 
 export function RestoreDialog({ open, onOpenChange }: RestoreDialogProps) {
+  const { t } = useTranslation("dialogs");
   const activeId = useConnectionStore((s) => s.activeId);
   const connections = useConnectionStore((s) => s.connections);
   const activeConn = connections.find((c) => c.id === activeId);
   const queryClient = useQueryClient();
-  const fileInputRef = useRef<HTMLInputElement | null>(null);
-
   const [fileName, setFileName] = useState("");
   const [fileContent, setFileContent] = useState("");
   const [statementCount, setStatementCount] = useState(0);
@@ -51,11 +51,6 @@ export function RestoreDialog({ open, onOpenChange }: RestoreDialogProps) {
     setError("");
     abortRef.current = false;
     onOpenChange(false);
-    if (fileInputRef.current) fileInputRef.current.value = "";
-  };
-
-  const handleFileSelect = () => {
-    fileInputRef.current?.click();
   };
 
   const loadFile = useCallback((file: File) => {
@@ -68,15 +63,14 @@ export function RestoreDialog({ open, onOpenChange }: RestoreDialogProps) {
       setStatementCount(splitStatements(content).length);
     };
     reader.onerror = () => {
-      setError("Failed to read file");
+      setError(t("restore.readFailed"));
     };
     reader.readAsText(file);
-  }, []);
+  }, [t]);
 
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    loadFile(file);
+  const handleFileSelect = async () => {
+    const file = await pickFile(".sql,.txt,text/plain");
+    if (file) loadFile(file);
   };
 
   const handleRestore = async () => {
@@ -88,48 +82,12 @@ export function RestoreDialog({ open, onOpenChange }: RestoreDialogProps) {
     const statements = splitStatements(fileContent);
     setProgress({ current: 0, total: statements.length });
 
-    // DDL (CREATE/DROP/ALTER) auto-commits in stoolap and breaks any active
-    // transaction, so we must NOT wrap DDL+DML in a single BEGIN/COMMIT.
-    // Instead, wrap consecutive DML statements in their own transactions.
-    // Each statement is sent individually to avoid the API's auto-transaction
-    // logic conflicting with our manual transaction control.
-    let inTxn = false;
-
     try {
-      for (let i = 0; i < statements.length; i++) {
-        if (abortRef.current) {
-          if (inTxn) {
-            try {
-              await api.executeQuery(activeId, "ROLLBACK");
-            } catch {
-              /* ignore */
-            }
-            inTxn = false;
-          }
-          throw new Error("Restore cancelled by user");
-        }
-        setProgress({ current: i + 1, total: statements.length });
-
-        const trimmed = statements[i].trimStart().toUpperCase();
-        const isDml =
-          trimmed.startsWith("INSERT") ||
-          trimmed.startsWith("UPDATE") ||
-          trimmed.startsWith("DELETE");
-
-        if (isDml && !inTxn && useTransaction) {
-          await api.executeQuery(activeId, "BEGIN");
-          inTxn = true;
-        } else if (!isDml && inTxn) {
-          await api.executeQuery(activeId, "COMMIT");
-          inTxn = false;
-        }
-
-        await api.executeQuery(activeId, statements[i]);
-      }
-
-      if (inTxn) {
-        await api.executeQuery(activeId, "COMMIT");
-      }
+      await restoreStatements((sql) => api.runSql(activeId, sql), statements, {
+        useTransaction,
+        aborted: () => abortRef.current,
+        onProgress: (done) => setProgress({ current: done, total: statements.length }),
+      });
 
       queryClient.invalidateQueries({ queryKey: ["tables", activeId] });
       queryClient.invalidateQueries({ queryKey: ["views", activeId] });
@@ -139,18 +97,11 @@ export function RestoreDialog({ open, onOpenChange }: RestoreDialogProps) {
       queryClient.invalidateQueries({ queryKey: ["rowcount", activeId] });
       queryClient.invalidateQueries({ queryKey: ["ddl", activeId] });
 
-      toast.success(
-        `Restore complete: ${statements.length} statements executed`,
-      );
+      const msg = t("restore.complete", { count: statements.length });
+      import("@/lib/native").then((n) => n.notify(t("restore.notifyTitle"), msg));
+      toast.success(msg);
       resetAndClose();
     } catch (e) {
-      if (inTxn) {
-        try {
-          await api.executeQuery(activeId, "ROLLBACK");
-        } catch {
-          /* ignore */
-        }
-      }
       setError(errorMessage(e));
     } finally {
       setLoading(false);
@@ -181,24 +132,25 @@ export function RestoreDialog({ open, onOpenChange }: RestoreDialogProps) {
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
-            <Upload className="h-5 w-5" />
-            Restore Database
+            <FileInput className="h-5 w-5" />
+            {t("restore.title")}
           </DialogTitle>
         </DialogHeader>
 
         <div className="space-y-4 py-2">
           {activeConn && (
             <p className="text-sm text-muted-foreground">
-              Import a SQL dump into{" "}
-              <span className="font-medium text-foreground">
-                {activeConn.name}
-              </span>
-              .
+              <Trans
+                t={t}
+                i18nKey="restore.intro"
+                values={{ name: activeConn.name }}
+                components={{ b: <span className="font-medium text-foreground" /> }}
+              />
             </p>
           )}
 
           <div className="space-y-2">
-            <Label>SQL File</Label>
+            <Label>{t("restore.file")}</Label>
             <div
               className={`flex items-center justify-center border-2 border-dashed rounded-lg p-6 cursor-pointer transition-colors ${dragOver ? "border-primary bg-primary/10" : "hover:border-primary/50 hover:bg-muted/30"}`}
               onClick={!loading ? handleFileSelect : undefined}
@@ -220,43 +172,40 @@ export function RestoreDialog({ open, onOpenChange }: RestoreDialogProps) {
                   <FileUp className="h-8 w-8 mx-auto mb-2 text-primary" />
                   <p className="text-sm font-medium">{fileName}</p>
                   <p className="text-xs text-muted-foreground mt-1">
-                    {statementCount} statement
-                    {statementCount !== 1 ? "s" : ""} detected
+                    {t("restore.detected", { count: statementCount })}
                   </p>
                 </div>
               ) : (
                 <div className="text-center">
                   <FileUp className="h-8 w-8 mx-auto mb-2 text-muted-foreground" />
                   <p className="text-sm text-muted-foreground">
-                    Click or drag and drop a .sql file
+                    {t("restore.dropHint")}
                   </p>
                 </div>
               )}
             </div>
-            <input
-              ref={fileInputRef}
-              type="file"
-              accept=".sql,text/plain"
-              className="hidden"
-              onChange={handleFileChange}
-            />
           </div>
 
-          <label className="flex items-center gap-2 text-sm cursor-pointer">
-            <Checkbox
-              checked={useTransaction}
-              onCheckedChange={(v) => setUseTransaction(!!v)}
-              disabled={loading}
-            />
-            Wrap in transaction (rollback on error)
-          </label>
+          <div className="space-y-1">
+            <label className="flex items-center gap-2 text-sm cursor-pointer">
+              <Checkbox
+                checked={useTransaction}
+                onCheckedChange={(v) => setUseTransaction(!!v)}
+                disabled={loading}
+              />
+              {t("restore.useTransaction")}
+            </label>
+            <p className="pl-6 text-xs text-muted-foreground">
+              {t("restore.useTransactionHint")}
+            </p>
+          </div>
 
           {loading && (
             <div className="space-y-2">
               <div className="flex items-center justify-between text-sm">
                 <span className="flex items-center gap-2 text-muted-foreground">
                   <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                  Executing statements...
+                  {t("restore.executing")}
                 </span>
                 <span className="text-muted-foreground tabular-nums">
                   {progress.current}/{progress.total} ({pct}%)
@@ -276,13 +225,13 @@ export function RestoreDialog({ open, onOpenChange }: RestoreDialogProps) {
 
         <DialogFooter>
           <Button variant="outline" onClick={handleCancel}>
-            {loading ? "Cancel" : "Close"}
+            {loading ? t("actions.cancel") : t("actions.close")}
           </Button>
           <Button
             onClick={handleRestore}
             disabled={loading || !fileContent || !activeId}
           >
-            {loading ? "Restoring..." : "Restore"}
+            {loading ? t("restore.restoring") : t("restore.restore")}
           </Button>
         </DialogFooter>
       </DialogContent>

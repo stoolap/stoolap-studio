@@ -1,0 +1,26 @@
+{
+  "errorBoundary": {
+    "title": "Une erreur s'est produite",
+    "unexpected": "Une erreur inattendue s'est produite.",
+    "tryAgain": "Réessayer"
+  },
+  "errors": {
+    "unknown": "Erreur inconnue",
+    "queryCancelled": "Requête annulée",
+    "restoreCancelled": "Restauration annulée par l'utilisateur"
+  },
+  "fileTypes": {
+    "ext": "Fichiers {{ext}}",
+    "sql": "Fichiers SQL",
+    "all": "Tous les fichiers"
+  },
+  "save": {
+    "saved": "{{name}} enregistré",
+    "failed": "Impossible d'enregistrer {{name}}"
+  },
+  "native": {
+    "openDatabase": "Ouvrir une base de données Stoolap",
+    "ok": "OK",
+    "cancel": "Annuler"
+  }
+}

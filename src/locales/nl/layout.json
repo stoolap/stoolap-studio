@@ -1,0 +1,36 @@
+{
+  "appShell": {
+    "hideSidebar": "Zijbalk verbergen",
+    "showSidebar": "Zijbalk tonen"
+  },
+  "statusBar": {
+    "inMemory": "In-memory",
+    "noConnection": "Geen verbinding",
+    "inMemoryHint": "Alleen in het geheugen: wijzigingen gaan verloren als je de database of de app sluit. Maak een back-up om ze te bewaren.",
+    "transactionOpen": "Transactie open",
+    "transactionOpenHint": "Je sessie zit in een transactie: wat je hebt uitgevoerd is niet vastgelegd en andere sessies zien het niet. Voer COMMIT uit om het te bewaren of ROLLBACK om het ongedaan te maken."
+  },
+  "dataTab": {
+    "unavailable": "Tabel \"{{table}}\" is niet meer beschikbaar: {{error}}",
+    "loading": "Tabelschema laden..."
+  },
+  "agentToggle": {
+    "title": "Agent",
+    "hide": "Agent verbergen",
+    "show": "Agent tonen"
+  },
+  "welcome": {
+    "openDatabase": "Database openen…",
+    "newMemory": "Nieuwe in-memory database",
+    "loadExample": "Voorbeelddatabase laden",
+    "recent": "Recent",
+    "opening": "Openen…",
+    "openFailed": "Kan {{name}} niet openen"
+  },
+  "toolbar": {
+    "examplesTab": "Voorbeelden",
+    "loadExampleFailed": "Kan voorbeeld niet laden",
+    "openFailed": "Kan {{name}} niet openen",
+    "createFailed": "Kan database niet maken"
+  }
+}

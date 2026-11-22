@@ -1,6 +1,5 @@
-"use client";
-
 import { useState } from "react";
+import { useTranslation } from "react-i18next";
 import {
   Dialog,
   DialogContent,
@@ -11,7 +10,6 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Checkbox } from "@/components/ui/checkbox";
 import {
   Select,
   SelectContent,
@@ -19,18 +17,21 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipTrigger,
-} from "@/components/ui/tooltip";
-import { Badge } from "@/components/ui/badge";
-import { Plus, Trash2, Link2 } from "lucide-react";
+import { Plus, Trash2, ArrowRight } from "lucide-react";
 import { useConnectionStore } from "@/stores/connection-store";
 import { useTables, useTableColumns } from "@/hooks/use-schema";
-import { quoteId, errorMessage } from "@/lib/utils";
+import { errorMessage, quoteId } from "@/lib/utils";
 import { formatDefaultValue } from "@/lib/sql-utils";
-import { DATA_TYPES, VECTOR_DIM_PRESETS } from "@/lib/constants";
+import { Tip } from "@/components/ui/tip";
+import {
+  CellInput,
+  ColumnList,
+  Flag,
+  RowDetail,
+  SqlPreview,
+  TypeSelect,
+  VectorSize,
+} from "./column-grid";
 import * as api from "@/lib/api-client";
 
 let _colIdSeq = 0;
@@ -45,6 +46,9 @@ interface ColumnDef {
   defaultValue: string;
   autoIncrement: boolean;
   hasForeignKey: boolean;
+  hasCheck: boolean;
+  /** A CHECK's condition, without its parentheses */
+  check: string;
   refTable: string;
   refColumn: string;
   onDelete: string;
@@ -64,6 +68,8 @@ const emptyColumn = (): ColumnDef => ({
   defaultValue: "",
   autoIncrement: false,
   hasForeignKey: false,
+  hasCheck: false,
+  check: "",
   refTable: "",
   refColumn: "",
   onDelete: "RESTRICT",
@@ -77,6 +83,10 @@ interface CreateTableDialogProps {
   onCreated: () => void;
 }
 
+const COLS = "grid grid-cols-[minmax(0,1fr)_112px_188px_120px_28px] items-center gap-x-2";
+
+/** The table and column a foreign key points at, and what happens to the row
+ *  when that one is deleted or changed */
 function FkConfig({
   col,
   tables,
@@ -86,22 +96,21 @@ function FkConfig({
   tables: string[];
   onUpdate: (updates: Partial<ColumnDef>) => void;
 }) {
+  const { t } = useTranslation("dialogs");
   const { data: refColumns } = useTableColumns(col.refTable || null);
+  const trigger = "h-7 text-xs font-data";
 
   return (
-    <div className="flex items-center gap-2 pl-2 pr-1 py-1.5 bg-blue-500/5 border-t border-blue-500/20">
-      <Link2 className="h-3 w-3 text-blue-400 shrink-0" />
-      <Select
-        value={col.refTable}
-        onValueChange={(v) => onUpdate({ refTable: v, refColumn: "" })}
-      >
-        <SelectTrigger className="h-7 text-xs w-[140px]">
-          <SelectValue placeholder="Ref table" />
+    <RowDetail>
+      <ArrowRight className="h-3.5 w-3.5 text-muted-foreground" />
+      <Select value={col.refTable} onValueChange={(v) => onUpdate({ refTable: v, refColumn: "" })}>
+        <SelectTrigger size="sm" className={`${trigger} w-[130px]`}>
+          <SelectValue placeholder={t("table.refTable")} />
         </SelectTrigger>
         <SelectContent>
-          {tables.map((t) => (
-            <SelectItem key={t} value={t}>
-              {t}
+          {tables.map((name) => (
+            <SelectItem key={name} value={name} className="font-data text-xs">
+              {name}
             </SelectItem>
           ))}
         </SelectContent>
@@ -111,48 +120,33 @@ function FkConfig({
         onValueChange={(v) => onUpdate({ refColumn: v })}
         disabled={!col.refTable}
       >
-        <SelectTrigger className="h-7 text-xs w-[120px]">
-          <SelectValue placeholder="Ref column" />
+        <SelectTrigger size="sm" className={`${trigger} w-[120px]`}>
+          <SelectValue placeholder={t("table.refColumn")} />
         </SelectTrigger>
         <SelectContent>
           {refColumns?.map((c) => (
-            <SelectItem key={c.field} value={c.field}>
+            <SelectItem key={c.field} value={c.field} className="font-data text-xs">
               {c.field}
             </SelectItem>
           ))}
         </SelectContent>
       </Select>
-      <Select
-        value={col.onDelete}
-        onValueChange={(v) => onUpdate({ onDelete: v })}
-      >
-        <SelectTrigger className="h-7 text-xs w-[110px]">
-          <SelectValue />
-        </SelectTrigger>
-        <SelectContent>
-          {FK_ACTIONS.map((a) => (
-            <SelectItem key={a} value={a}>
-              DEL: {a}
-            </SelectItem>
-          ))}
-        </SelectContent>
-      </Select>
-      <Select
-        value={col.onUpdate}
-        onValueChange={(v) => onUpdate({ onUpdate: v })}
-      >
-        <SelectTrigger className="h-7 text-xs w-[110px]">
-          <SelectValue />
-        </SelectTrigger>
-        <SelectContent>
-          {FK_ACTIONS.map((a) => (
-            <SelectItem key={a} value={a}>
-              UPD: {a}
-            </SelectItem>
-          ))}
-        </SelectContent>
-      </Select>
-    </div>
+      {(["onDelete", "onUpdate"] as const).map((key) => (
+        <Select key={key} value={col[key]} onValueChange={(v) => onUpdate({ [key]: v })}>
+          <SelectTrigger size="sm" className={trigger}>
+            <span className="text-muted-foreground">{key === "onDelete" ? "ON DELETE" : "ON UPDATE"}</span>
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {FK_ACTIONS.map((a) => (
+              <SelectItem key={a} value={a} className="font-data text-xs">
+                {a}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      ))}
+    </RowDetail>
   );
 }
 
@@ -161,6 +155,7 @@ export function CreateTableDialog({
   onOpenChange,
   onCreated,
 }: CreateTableDialogProps) {
+  const { t } = useTranslation("dialogs");
   const activeId = useConnectionStore((s) => s.activeId);
   const { data: existingTables } = useTables();
   const [tableName, setTableName] = useState("");
@@ -216,6 +211,8 @@ export function CreateTableDialog({
         if (c.autoIncrement) def += " AUTO_INCREMENT";
         if (c.notNull && !c.primaryKey) def += " NOT NULL";
         if (c.unique && !c.primaryKey) def += " UNIQUE";
+        // Before DEFAULT, which would read it as part of its value
+        if (c.hasCheck && c.check.trim()) def += ` CHECK (${c.check.trim()})`;
         if (c.defaultValue) {
           def += ` DEFAULT ${formatDefaultValue(c.defaultValue)}`;
         }
@@ -241,7 +238,7 @@ export function CreateTableDialog({
     setError("");
     try {
       const sql = generateSQL();
-      await api.executeQuery(activeId, sql);
+      await api.runSql(activeId, sql);
       onCreated();
       handleOpenChange(false);
     } catch (e) {
@@ -251,19 +248,24 @@ export function CreateTableDialog({
     }
   };
 
+
   const tables = existingTables ?? [];
+  const canCreate = !!tableName.trim() && columns.some((c) => c.name.trim());
 
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogContent className="sm:max-w-3xl max-h-[85vh] overflow-y-auto">
         <DialogHeader>
-          <DialogTitle>Create Table</DialogTitle>
+          <DialogTitle>{t("createTable.title")}</DialogTitle>
         </DialogHeader>
 
-        <div className="space-y-4 py-2">
-          <div className="space-y-2">
-            <Label>Table Name</Label>
+        <div className="space-y-4">
+          <div className="flex items-center gap-3">
+            <Label htmlFor="create-table-name" className="shrink-0">
+              {t("createTable.name")}
+            </Label>
             <Input
+              id="create-table-name"
               placeholder="my_table"
               value={tableName}
               onChange={(e) => setTableName(e.target.value)}
@@ -272,184 +274,124 @@ export function CreateTableDialog({
           </div>
 
           <div className="space-y-2">
-            <div className="flex items-center justify-between">
-              <Label>Columns</Label>
-              <Button variant="outline" size="sm" onClick={addColumn}>
-                <Plus className="h-3.5 w-3.5 mr-1" />
-                Add Column
-              </Button>
-            </div>
-
-            {/* Column header */}
-            <div className="grid grid-cols-[1fr_120px_60px_44px_44px_44px_44px_44px_120px_36px] gap-x-2 px-2 text-[11px] font-medium text-muted-foreground uppercase tracking-wider">
-              <span>Name</span>
-              <span>Type</span>
-              <span>Dims</span>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <span className="text-center cursor-help">PK</span>
-                </TooltipTrigger>
-                <TooltipContent>Primary Key</TooltipContent>
-              </Tooltip>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <span className="text-center cursor-help">NN</span>
-                </TooltipTrigger>
-                <TooltipContent>Not Null</TooltipContent>
-              </Tooltip>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <span className="text-center cursor-help">UQ</span>
-                </TooltipTrigger>
-                <TooltipContent>Unique</TooltipContent>
-              </Tooltip>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <span className="text-center cursor-help">AI</span>
-                </TooltipTrigger>
-                <TooltipContent>Auto Increment</TooltipContent>
-              </Tooltip>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <span className="text-center cursor-help">FK</span>
-                </TooltipTrigger>
-                <TooltipContent>Foreign Key</TooltipContent>
-              </Tooltip>
-              <span>Default</span>
-              <span />
-            </div>
-
-            {/* Column rows */}
-            <div className="space-y-1">
+            <ColumnList
+              header={
+                <div className={`${COLS} px-1.5 py-1.5`}>
+                  <span className="px-2">{t("table.colName")}</span>
+                  <span className="px-2">{t("table.colType")}</span>
+                  <span className="px-1">{t("table.constraints")}</span>
+                  <span className="px-2">{t("table.colDefault")}</span>
+                  <span />
+                </div>
+              }
+            >
               {columns.map((col, i) => (
-                <div
-                  key={col._id}
-                  className="rounded border bg-muted/20 hover:bg-muted/40 transition-colors overflow-hidden"
-                >
-                  <div className="grid grid-cols-[1fr_120px_60px_44px_44px_44px_44px_44px_120px_36px] gap-x-2 items-center p-1.5">
-                    <Input
+                <div key={col._id} className="group">
+                  <div className={`${COLS} px-1.5 py-1`}>
+                    <CellInput
+                      aria-label={t("table.colName")}
                       placeholder="column_name"
                       value={col.name}
-                      onChange={(e) =>
-                        updateColumn(i, { name: e.target.value })
-                      }
-                      className="h-8 text-sm font-data"
+                      onChange={(e) => updateColumn(i, { name: e.target.value })}
                     />
-                    <Select
+                    <TypeSelect
                       value={col.type}
-                      onValueChange={(v) =>
+                      onChange={(v) =>
                         updateColumn(i, {
                           type: v,
                           ...(v !== "VECTOR" && { dimensions: "" }),
+                          // A vector is none of these
+                          ...(v === "VECTOR" && { primaryKey: false, unique: false, autoIncrement: false }),
                         })
                       }
-                    >
-                      <SelectTrigger className="h-8 text-sm">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {DATA_TYPES.map((t) => (
-                          <SelectItem key={t} value={t}>
-                            {t}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                    <Input
-                      placeholder={col.type === "VECTOR" ? "e.g. 384" : ""}
-                      value={col.dimensions}
-                      onChange={(e) =>
-                        updateColumn(i, {
-                          dimensions: e.target.value.replace(/\D/g, ""),
-                        })
-                      }
-                      className="h-8 text-sm font-data"
-                      disabled={col.type !== "VECTOR"}
                     />
-                    <div className="flex justify-center">
-                      <Checkbox
-                        checked={col.primaryKey}
-                        onCheckedChange={(v) =>
-                          updateColumn(i, { primaryKey: !!v })
-                        }
+                    <div className="flex items-center gap-1">
+                      <Flag
+                        label="PK"
+                        name={t("table.primaryKey")}
+                        on={col.primaryKey}
+                        onChange={(v) => updateColumn(i, { primaryKey: v })}
                         disabled={col.type === "VECTOR"}
                       />
-                    </div>
-                    <div className="flex justify-center">
-                      <Checkbox
-                        checked={col.notNull}
-                        onCheckedChange={(v) =>
-                          updateColumn(i, { notNull: !!v })
-                        }
+                      <Flag
+                        label="NN"
+                        name={t("table.notNull")}
+                        on={col.notNull || col.primaryKey}
+                        onChange={(v) => updateColumn(i, { notNull: v })}
                         disabled={col.primaryKey}
                       />
-                    </div>
-                    <div className="flex justify-center">
-                      <Checkbox
-                        checked={col.unique}
-                        onCheckedChange={(v) =>
-                          updateColumn(i, { unique: !!v })
-                        }
+                      <Flag
+                        label="UQ"
+                        name={t("table.unique")}
+                        on={col.unique}
+                        onChange={(v) => updateColumn(i, { unique: v })}
                         disabled={col.primaryKey || col.type === "VECTOR"}
                       />
-                    </div>
-                    <div className="flex justify-center">
-                      <Checkbox
-                        checked={col.autoIncrement}
-                        onCheckedChange={(v) =>
-                          updateColumn(i, { autoIncrement: !!v })
-                        }
+                      <Flag
+                        label="AI"
+                        name={t("table.autoIncrement")}
+                        on={col.autoIncrement}
+                        onChange={(v) => updateColumn(i, { autoIncrement: v })}
                         disabled={col.type === "VECTOR"}
                       />
-                    </div>
-                    <div className="flex justify-center">
-                      <Checkbox
-                        checked={col.hasForeignKey}
-                        onCheckedChange={(v) =>
+                      <Flag
+                        label="FK"
+                        name={t("table.foreignKey")}
+                        on={col.hasForeignKey}
+                        onChange={(v) =>
                           updateColumn(i, {
-                            hasForeignKey: !!v,
+                            hasForeignKey: v,
                             ...(!v && { refTable: "", refColumn: "" }),
                           })
                         }
                         disabled={col.primaryKey}
                       />
+                      <Flag
+                        label="CK"
+                        name={t("table.check")}
+                        on={col.hasCheck}
+                        onChange={(v) => updateColumn(i, { hasCheck: v })}
+                      />
                     </div>
-                    <Input
-                      placeholder="default value"
+                    <CellInput
+                      aria-label={t("table.colDefault")}
+                      placeholder={t("table.defaultPlaceholder")}
                       value={col.defaultValue}
-                      onChange={(e) =>
-                        updateColumn(i, { defaultValue: e.target.value })
-                      }
-                      className="h-8 text-sm font-data"
+                      onChange={(e) => updateColumn(i, { defaultValue: e.target.value })}
                     />
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      className="h-8 w-8 shrink-0 text-muted-foreground hover:text-destructive"
-                      onClick={() => removeColumn(i)}
-                      disabled={columns.length === 1}
-                    >
-                      <Trash2 className="h-3.5 w-3.5" />
-                    </Button>
+                    <Tip label={t("alterTable.remove")}>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        aria-label={t("alterTable.remove")}
+                        className="h-7 w-7 text-muted-foreground opacity-0 group-hover:opacity-100 focus-visible:opacity-100 hover:text-destructive"
+                        onClick={() => removeColumn(i)}
+                        disabled={columns.length === 1}
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </Button>
+                    </Tip>
                   </div>
                   {col.type === "VECTOR" && (
-                    <div className="flex items-center gap-1.5 px-2 py-1.5 border-t border-purple-500/20 bg-purple-500/5">
-                      <span className="text-[10px] text-muted-foreground mr-1">
-                        Presets:
-                      </span>
-                      {VECTOR_DIM_PRESETS.map((d) => (
-                        <Badge
-                          key={d}
-                          variant="outline"
-                          className="text-[10px] px-1.5 py-0 cursor-pointer hover:bg-purple-500/10 hover:border-purple-500/50"
-                          onClick={() =>
-                            updateColumn(i, { dimensions: String(d) })
-                          }
-                        >
-                          {d}
-                        </Badge>
-                      ))}
-                    </div>
+                    <VectorSize
+                      label={t("table.colDims")}
+                      placeholder={t("table.dimsPlaceholder")}
+                      value={col.dimensions}
+                      onChange={(dimensions) => updateColumn(i, { dimensions })}
+                    />
+                  )}
+                  {col.hasCheck && (
+                    <RowDetail>
+                      <span className="font-data text-muted-foreground">CHECK (</span>
+                      <Input
+                        aria-label={t("table.check")}
+                        placeholder={`${col.name || "value"} > 0`}
+                        value={col.check}
+                        onChange={(e) => updateColumn(i, { check: e.target.value })}
+                        className="h-7 w-64 font-data text-xs md:text-xs"
+                      />
+                      <span className="font-data text-muted-foreground">)</span>
+                    </RowDetail>
                   )}
                   {col.hasForeignKey && (
                     <FkConfig
@@ -460,34 +402,25 @@ export function CreateTableDialog({
                   )}
                 </div>
               ))}
-            </div>
+            </ColumnList>
+
+            <Button variant="ghost" size="sm" className="-ml-2 text-muted-foreground" onClick={addColumn}>
+              <Plus className="h-3.5 w-3.5" />
+              {t("table.addColumn")}
+            </Button>
           </div>
 
-          {tableName && columns.some((c) => c.name) && (
-            <div className="space-y-1">
-              <Label className="text-xs text-muted-foreground">
-                Generated SQL
-              </Label>
-              <pre className="text-xs p-3 rounded bg-muted font-mono whitespace-pre-wrap border">
-                {generateSQL()}
-              </pre>
-            </div>
-          )}
+          {canCreate && <SqlPreview label={t("actions.generatedSql")} sql={generateSQL()} />}
 
           {error && <p className="text-sm text-destructive">{error}</p>}
         </div>
 
         <DialogFooter>
           <Button variant="outline" onClick={() => handleOpenChange(false)}>
-            Cancel
+            {t("actions.cancel")}
           </Button>
-          <Button
-            onClick={handleCreate}
-            disabled={
-              loading || !tableName.trim() || !columns.some((c) => c.name)
-            }
-          >
-            {loading ? "Creating..." : "Create Table"}
+          <Button data-default onClick={handleCreate} disabled={loading || !canCreate}>
+            {loading ? t("actions.creating") : t("createTable.title")}
           </Button>
         </DialogFooter>
       </DialogContent>
