@@ -253,7 +253,7 @@ export function VectorSearchDialog({
                   setPickRows([]);
                 }}
               >
-                <SelectTrigger className="h-9 text-sm">
+                <SelectTrigger className="h-9 w-full text-sm">
                   <SelectValue placeholder={t("vectorSearch.selectTable")} />
                 </SelectTrigger>
                 <SelectContent>
@@ -273,7 +273,8 @@ export function VectorSearchDialog({
                 onValueChange={setSelectedColumn}
                 disabled={vectorColumns.length === 0}
               >
-                <SelectTrigger className="h-9 text-sm text-purple-500">
+                {/* As wide as its column: a long name is cut, not run over the next */}
+                <SelectTrigger className="h-9 w-full text-sm text-purple-500 [&_[data-slot=select-value]]:min-w-0">
                   <SelectValue
                     placeholder={
                       vectorColumns.length === 0
@@ -285,10 +286,10 @@ export function VectorSearchDialog({
                 <SelectContent>
                   {vectorColumns.map((c) => (
                     <SelectItem key={c.field} value={c.field}>
-                      <span className="flex items-center gap-1.5">
+                      <span className="flex min-w-0 items-center gap-1.5">
                         <Waypoints className="h-3 w-3 text-purple-400" />
-                        {c.field}
-                        <span className="text-xs text-muted-foreground">
+                        <span className="truncate">{c.field}</span>
+                        <span className="shrink-0 text-xs text-muted-foreground">
                           {c.type}
                         </span>
                       </span>
@@ -301,7 +302,7 @@ export function VectorSearchDialog({
             <div className="space-y-1.5">
               <Label className="text-xs">{t("vectorSearch.metric")}</Label>
               <Select value={metric} onValueChange={setMetric}>
-                <SelectTrigger className="h-9 text-sm">
+                <SelectTrigger className="h-9 w-full text-sm">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
